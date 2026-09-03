@@ -1,0 +1,1176 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+<meta http-equiv="Pragma" content="no-cache">
+<meta http-equiv="Expires" content="0">
+<title>JARVIS — UI v5.5</title>
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
+<script>
+  // ── Helpers for external opening via Jarvis bridge ──
+  function jarvisOpenUrl(encUrl){
+    try{
+      const u = decodeURIComponent(encUrl);
+      window.location.href = `jarvis://open?url=${encodeURIComponent(u)}`;
+    }catch(e){ console.error('jarvisOpenUrl error', e); }
+  }
+</script>
+  <style>
+  :root {
+    --primary: #00d4ff;
+    --secondary: #dfefff;
+    --bg: radial-gradient(ellipse at center, rgba(1,12,25,0.95) 0%, rgba(0,2,6,1) 60%), linear-gradient(180deg, rgba(0,8,20,0.9), rgba(0,2,8,1));
+  }
+  body { margin:0; height:100vh; background: var(--bg); color: var(--secondary); }
+  * { -webkit-tap-highlight-color: transparent; }
+  *:focus, *:focus-visible, *:hover { outline: none !important; box-shadow: none !important; }
+  ::selection { background: transparent; color: inherit; }
+  button, a, input, textarea, [tabindex], .bottom-btn, .chat-send, .mic-btn, #mapa-close { outline: none !important; box-shadow: none !important; }
+  button:hover, button:focus, button:focus-visible, a:hover, a:focus, a:focus-visible,
+  input:hover, input:focus, input:focus-visible, textarea:hover, textarea:focus, textarea:focus-visible {
+    outline: none !important;
+    box-shadow: none !important;
+    filter: none !important;
+  }
+  button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible { outline: none !important; box-shadow: none !important; }
+  .bottom-btn, .chat-send, .mic-btn, #mapa-close, .chat-input { outline: none !important; }
+  #hud-tl, #hud-tr, #hud-bl, #hud-br { display: none !important; opacity: 0 !important; visibility: hidden !important; }
+
+  /* ── Cursor Normal ── */
+body { cursor: auto; }
+
+/* ── Boot Sequence Overlay ── */
+#boot-screen {
+  position: fixed; inset: 0; z-index: 9999; background: var(--bg);
+  display: flex; align-items: center; justify-content: center;
+  transition: opacity 1s ease-out, visibility 1s; cursor: auto;
+}
+.scan-line-h {
+  position: absolute; top: -10%; left: 0; width: 100%; height: 3px;
+  background: var(--primary);
+  box-shadow: 0 0 50px 15px rgba(0,212,255,0.8), 0 0 10px 2px #fff;
+  animation: scanH 3.5s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+}
+@keyframes scanH { 0% { top:-10%; opacity:0; } 10% { opacity:1; } 85% { opacity:1; } 100% { top:110%; opacity:0; } }
+
+#boot-terminal {
+  position: absolute; bottom: 40px; left: 40px; color: var(--primary);
+  font-size: 14px; line-height: 1.6; text-shadow: 0 0 8px var(--primary); text-transform: uppercase;
+}
+.boot-cursor {
+  display: inline-block; width: 8px; height: 14px; background: var(--primary);
+  animation: blink 0.8s infinite; vertical-align: middle;
+}
+@keyframes blink { 0%, 49% { opacity: 1; } 50%, 100% { opacity: 0; } }
+
+/* ── Background layer ── */
+canvas#bg { position:fixed; inset:0; z-index:0; pointer-events:none; }
+
+/* ── Ambient scanline overlay ── */
+body::after {
+  content:''; position:fixed; inset:0; z-index:1; pointer-events:none;
+  background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.02) 2px, rgba(0,0,0,0.02) 4px);
+}
+
+/* ── Main wrap ── */
+.wrap {
+  position: fixed; bottom: 50%; left: 50%; transform: translate(-50%, 50%) scale(1);
+  transform-origin: center center; z-index: 50;
+  display: flex; flex-direction: column; align-items: center; justify-content: center;
+  transition: transform 0.9s cubic-bezier(0.65, 0, 0.35, 1), bottom 0.9s cubic-bezier(0.65, 0, 0.35, 1), left 0.9s cubic-bezier(0.65, 0, 0.35, 1), right 0.9s cubic-bezier(0.65, 0, 0.35, 1), opacity 0.7s ease;
+  pointer-events: none;
+}
+.wrap.widget-mode {
+  bottom: 20px; right: 20px; left: auto; transform: translate(0, 0) scale(0.25); transform-origin: bottom right;
+  opacity: 0.85;
+}
+
+/* ── Status bar ── */
+.status-bar {
+  position: fixed; top: 28px; left: 50%; transform: translateX(-50%); z-index: 10;
+  display: flex; align-items: center; gap: 24px; font-size: 8px; letter-spacing: 3px; color: rgba(0,212,255,0.5);
+  text-shadow: 0 0 5px rgba(0,212,255,0.3);
+}
+.status-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--primary); box-shadow: 0 0 6px var(--primary); animation: none; }
+@keyframes pulse-dot { 0%,100% { opacity:1; transform:scale(1); } 50% { opacity:0.4; transform:scale(0.7); } }
+
+/* ── Bottom Button Bar — SIN botón mic cuadrado ── */
+.bottom-bar {
+  position: fixed; bottom: 26px; left: 50%; transform: translateX(-50%);
+  z-index: 100; display: flex; gap: 12px; pointer-events: auto;
+}
+.bottom-btn {
+  width: 52px; height: 52px; border-radius: 14px;
+  background: rgba(5, 12, 22, 0.94);
+  border: 1px solid rgba(0, 212, 255, 0.22);
+  color: rgba(0, 212, 255, 0.95);
+  cursor: pointer;
+  display: inline-flex; align-items: center; justify-content: center;
+  transition: transform 0.18s ease, box-shadow 0.18s ease, background 0.18s ease;
+  position: relative;
+  padding: 6px;
+}
+.bottom-btn svg { width: 22px; height: 22px; fill: rgba(0,212,255,0.95); transition: fill 0.18s ease; }
+.bottom-btn span { display: none; }
+.bottom-btn:hover {
+  background: rgba(0, 116, 225, 0.17);
+  border-color: rgba(0, 212, 255, 0.55);
+  color: #ffffff;
+  box-shadow: 0 0 20px rgba(0,212,255,0.24), inset 0 0 12px rgba(0,212,255,0.08);
+}
+.bottom-btn:hover svg { fill: #ffffff; filter: drop-shadow(0 0 4px #00d4ff); }
+.bottom-btn:active { transform: scale(0.95); }
+.bottom-btn.danger { border-color: rgba(255,51,80,0.3); color: rgba(255,80,100,0.8); }
+.bottom-btn.danger svg { fill: rgba(255,80,100,0.8); }
+.bottom-btn.danger:hover { background: rgba(255,40,60,0.14); border-color: rgba(255,51,80,0.8); color: #ff3355; box-shadow: 0 0 20px rgba(255,40,60,0.25); }
+.bottom-btn.danger:hover svg { fill: #ff3355; filter: drop-shadow(0 0 4px #ff3355); }
+.bottom-btn::before, .bottom-btn::after { display: none; }
+
+/* ── Chat Container ── */
+.chat-container {
+  position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%) scale(0.95);
+  width: 94vw; height: 90vh; background: rgba(0, 8, 15, 0.96); border: 1px solid rgba(0, 212, 255, 0.4);
+  box-shadow: 0 0 60px rgba(0, 212, 255, 0.15), inset 0 0 30px rgba(0, 212, 255, 0.05);
+  z-index: 40; opacity: 0; pointer-events: none; display: flex; flex-direction: column;
+  transition: opacity 0.5s ease, transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
+  border-radius: 18px;
+  overflow: hidden;
+  will-change: transform, opacity;
+  -webkit-mask-image:
+    radial-gradient(ellipse 80px 80px at 0% 0%, transparent 60%, black 100%),
+    radial-gradient(ellipse 80px 80px at 100% 0%, transparent 60%, black 100%),
+    radial-gradient(ellipse 80px 80px at 0% 100%, transparent 60%, black 100%),
+    radial-gradient(ellipse 80px 80px at 100% 100%, transparent 60%, black 100%),
+    linear-gradient(to bottom, transparent 0%, black 6%, black 94%, transparent 100%),
+    linear-gradient(to right, transparent 0%, black 3%, black 97%, transparent 100%);
+  -webkit-mask-composite: destination-in, destination-in, destination-in, destination-in, destination-in, destination-in;
+  mask-image:
+    radial-gradient(ellipse 80px 80px at 0% 0%, transparent 60%, black 100%),
+    radial-gradient(ellipse 80px 80px at 100% 0%, transparent 60%, black 100%),
+    radial-gradient(ellipse 80px 80px at 0% 100%, transparent 60%, black 100%),
+    radial-gradient(ellipse 80px 80px at 100% 100%, transparent 60%, black 100%),
+    linear-gradient(to bottom, transparent 0%, black 6%, black 94%, transparent 100%),
+    linear-gradient(to right, transparent 0%, black 3%, black 97%, transparent 100%);
+  mask-composite: intersect;
+}
+.chat-container::after {
+  content:''; position:absolute; inset:0; z-index: -1; pointer-events: none;
+  background: linear-gradient(to bottom, transparent 0%, rgba(0,212,255,0.08) 50%, transparent 100%); background-size: 100% 100%; animation: none;
+}
+.chat-container.active {
+  opacity: 1; pointer-events: auto;
+  transform: translate(-50%, -50%) scale(1);
+}
+
+.chat-header {
+  padding: 15px 30px; font-size: 12px; letter-spacing: 4px; color: var(--primary); border-bottom: 1px solid rgba(0,212,255,0.2);
+  display: flex; justify-content: space-between; align-items: center; background: linear-gradient(90deg, rgba(0,212,255,0.1) 0%, transparent 100%);
+  text-shadow: 0 0 8px var(--primary);
+}
+.chat-close { cursor: pointer; color: rgba(255,255,255,0.5); font-size: 18px; transition: none; }
+.chat-close:hover { color: #ff3366; text-shadow: 0 0 15px #ff3366; transform: rotate(90deg) scale(1.2); }
+
+.chat-messages { flex: 1; padding: 30px; overflow-y: auto; display: flex; flex-direction: column; gap: 20px; scroll-behavior: smooth;
+  -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 8%, black 92%, transparent 100%);
+  mask-image: linear-gradient(to bottom, transparent 0%, black 8%, black 92%, transparent 100%);
+}
+.chat-messages::-webkit-scrollbar { width: 4px; } .chat-messages::-webkit-scrollbar-track { background: transparent; } .chat-messages::-webkit-scrollbar-thumb { background: rgba(0,212,255,0.3); border-radius: 2px; }
+
+.msg {
+  max-width: 70%; padding: 15px 20px; font-size: 14px; line-height: 1.5; border-radius: 4px; position: relative; letter-spacing: 1px;
+}
+.msg.user { align-self: flex-end; background: rgba(0, 212, 255, 0.1); border-right: 3px solid var(--primary); color: var(--secondary); box-shadow: -5px 0 15px rgba(0,212,255,0.05); }
+.msg.ai { align-self: flex-start; background: rgba(255, 255, 255, 0.05); border-left: 3px solid var(--primary); color: rgba(255, 255, 255, 0.9); box-shadow: 5px 0 15px rgba(0,212,255,0.05); }
+.msg table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 13px; }
+.msg table th, .msg table td { padding: 6px 10px; border-bottom: 1px solid rgba(0,212,255,0.18); text-align: left; vertical-align: top; }
+.msg table th { color: var(--primary); text-transform: uppercase; letter-spacing: 1px; font-size: 11px; border-bottom: 1px solid rgba(0,212,255,0.45); }
+.msg table tr:hover td { background: rgba(0,212,255,0.05); }
+.msg ul { margin: 6px 0; padding-left: 18px; }
+.msg li { margin: 4px 0; }
+
+.msg-time { font-size: 9px; color: rgba(0,212,255,0.5); position: absolute; bottom: -16px; }
+.msg.user .msg-time { right: 0; } .msg.ai .msg-time { left: 0; }
+.ai-typing-cursor { display: inline-block; width: 8px; height: 14px; background: var(--primary); animation: blink 0.8s infinite; vertical-align: middle; margin-left: 5px; box-shadow: 0 0 8px var(--primary);}
+
+.chat-input-area { padding: 20px 30px; border-top: 1px solid rgba(0,212,255,0.2); display: flex; gap: 15px; background: rgba(0, 0, 0, 0.6); padding-right: 250px; }
+.chat-input { flex: 1; background: transparent; border: none; outline: none; color: var(--secondary); font-family: 'Share Tech Mono', monospace; font-size: 16px; padding: 10px; border-bottom: 1px solid rgba(0,212,255,0.3); transition: none; cursor: text; }
+.chat-input:focus { border-bottom: 1px solid var(--primary); box-shadow: 0 5px 15px -10px var(--primary); letter-spacing: 1px; transition: none; }
+.chat-send { background: rgba(0,212,255,0.05); border: 1px solid var(--primary); color: var(--primary); padding: 0 25px; font-family: inherit; font-size: 12px; cursor: pointer; transition: none; letter-spacing: 2px;}
+.chat-send:hover { background: rgba(0,212,255,0.08); color: var(--primary); box-shadow: none; }
+
+#main { display:block; transition: transform 0.1s ease-out; }
+
+.bottom-btn.active {
+  border-color: rgba(0,212,255,0.9);
+  background: rgba(0,212,255,0.15);
+  box-shadow: 0 0 20px rgba(0,212,255,0.4);
+}
+.bottom-btn.active svg { fill: #fff; filter: drop-shadow(0 0 4px #00d4ff); }
+
+.voice-bars { display: flex; align-items: center; gap: 3px; height: 18px; margin-top: 16px; opacity: 0; transition: none; }
+.voice-bars.active { opacity: 1; }
+.voice-bar { width: 2px; background: var(--primary); border-radius: 1px; box-shadow: 0 0 6px var(--primary); animation: bar-bounce 0.6s ease-in-out infinite; }
+.voice-bar:nth-child(1) { animation-delay:0.0s; } .voice-bar:nth-child(2) { animation-delay:0.1s; } .voice-bar:nth-child(3) { animation-delay:0.2s; } .voice-bar:nth-child(4) { animation-delay:0.1s; } .voice-bar:nth-child(5) { animation-delay:0.0s; }
+@keyframes bar-bounce { 0%,100% { height:4px; } 50% { height:18px; } }
+
+/* ── Mapa JARVIS overlay — estética azul oscuro tipo película ── */
+#mapa-overlay {
+  position: fixed; inset: 0; z-index: 500; background: linear-gradient(180deg, #02060d 0%, #040a13 100%);
+  display: flex; align-items: stretch; justify-content: stretch;
+  opacity: 0; pointer-events: none; transition: opacity 0.4s ease;
+  flex-direction: column;
+}
+#mapa-overlay.visible { opacity: 1; pointer-events: auto; }
+#mapa-container {
+  position: relative; width: 100%; height: 100%;
+  overflow: hidden;
+}
+#mapa-header {
+  position: absolute; top: 0; left: 0; right: 0; z-index: 1000;
+  background: rgba(0,4,12,0.88); border-bottom: 1px solid rgba(0,180,255,0.3);
+  padding: 9px 20px; display: flex; justify-content: space-between; align-items: center;
+  font-family: 'Share Tech Mono', monospace; font-size: 11px; letter-spacing: 3px;
+  color: rgba(0,212,255,0.9); text-shadow: 0 0 12px rgba(0,212,255,0.7);
+  backdrop-filter: blur(6px);
+}
+#mapa-close {
+  background: none; border: 1px solid rgba(255,51,102,0.45); color: rgba(255,80,120,0.85);
+  font-family: 'Share Tech Mono', monospace; font-size: 10px; letter-spacing: 2px;
+  padding: 4px 14px; cursor: pointer; transition: all 0.3s;
+}
+#mapa-close:hover { background: rgba(255,51,102,0.18); color: #ff3366; box-shadow: 0 0 12px rgba(255,51,102,0.4); }
+#mapa-div { width: 100%; height: 100%; padding-top: 38px; box-sizing: border-box; background: linear-gradient(180deg, #02070e 0%, #04111d 100%); }
+#mapa-sidebar {
+  position: absolute; top: 38px; right: 0; height: calc(100% - 38px); width: 320px;
+  background: linear-gradient(180deg, rgba(2,8,18,0.98), rgba(0,2,8,0.96));
+  border-left: 1px solid rgba(0,212,255,0.06); box-shadow: -10px 0 30px rgba(0,0,0,0.6);
+  padding: 12px; box-sizing: border-box; overflow-y: auto; z-index: 760;
+  display: none; gap: 8px;
+}
+#mapa-sidebar[aria-hidden="false"] { display: block; }
+#mapa-sidebar .sb-header { display:flex; justify-content:space-between; align-items:center; margin-bottom:8px; }
+#mapa-sidebar .sb-images { display:flex; flex-direction:column; gap:8px; }
+#mapa-sidebar .sb-images img { width:100%; height:140px; object-fit:cover; border-radius:8px; cursor:pointer; border:1px solid rgba(0,212,255,0.06); }
+#sidebar-tab {
+  position: fixed; right: 18px; bottom: 22px; z-index: 900; background: rgba(0,10,20,0.9);
+  color: var(--primary); border: 1px solid rgba(0,212,255,0.18); padding: 8px 12px; border-radius: 8px;
+  cursor: pointer; display: none; box-shadow: 0 6px 18px rgba(0,0,0,0.6);
+}
+#sidebar-tab.visible { display: block; }
+#sidebar-toggle { background: none; border: 1px solid rgba(255,255,255,0.04); color: rgba(0,212,255,0.85); padding:4px 8px; cursor:pointer; }
+#mapa-minimize:hover { background: rgba(0,212,255,0.04); }
+#mapa-scanline { display: none; }
+#mapa-vignette { display: none; }
+.mapa-corner {
+  position: absolute; width: 28px; height: 28px; z-index: 600; pointer-events: none;
+}
+#mc-tl { top: 38px; left: 0; border-top: 2px solid rgba(0,212,255,0.85); border-left: 2px solid rgba(0,212,255,0.85); }
+#mc-tr { top: 38px; right: 0; border-top: 2px solid rgba(0,212,255,0.85); border-right: 2px solid rgba(0,212,255,0.85); }
+#mc-bl { bottom: 0; left: 0; border-bottom: 2px solid rgba(0,212,255,0.85); border-left: 2px solid rgba(0,212,255,0.85); }
+#mc-br { bottom: 0; right: 0; border-bottom: 2px solid rgba(0,212,255,0.85); border-right: 2px solid rgba(0,212,255,0.85); }
+
+/* ── Estilos Leaflet — tema azul oscuro estilo película ── */
+.leaflet-container { background: linear-gradient(180deg, #081728 0%, #06111f 100%) !important; font-family: 'Share Tech Mono', monospace !important; }
+.leaflet-popup-content-wrapper {
+  background: rgba(0,15,35,0.98) !important; border: 2px solid rgba(0,212,255,0.8) !important;
+  color: #00d4ff !important; font-family: 'Share Tech Mono', monospace !important;
+  font-size: 12px !important; letter-spacing: 1px !important; border-radius: 4px !important;
+  box-shadow: 0 0 25px rgba(0,212,255,0.5) !important; padding: 10px !important;
+}
+.leaflet-popup-content { color: #00d4ff !important; }
+.leaflet-popup-content strong { color: #73d9ff !important; font-weight: bold; }
+.leaflet-popup-content a { color: #00d4ff !important; text-decoration: underline; }
+.leaflet-popup-tip { background: rgba(0,212,255,0.5) !important; }
+.leaflet-control-zoom { border: 1px solid rgba(0,212,255,0.5) !important; background: rgba(0,10,25,0.9) !important; }
+.leaflet-control-zoom a {
+  background: rgba(0,10,25,0.95) !important; color: #00d4ff !important; font-weight: bold;
+  border-color: rgba(0,212,255,0.4) !important; font-family: 'Share Tech Mono', monospace !important;
+  box-shadow: 0 0 10px rgba(0,212,255,0.3) !important;
+}
+.leaflet-control-zoom a:hover { background: rgba(0,212,255,0.2) !important; color: #73d9ff !important; box-shadow: 0 0 15px rgba(0,212,255,0.5) !important; }
+.leaflet-attribution-flag { display: none !important; }
+.leaflet-control-attribution { display: none !important; }
+@keyframes markerPing {
+  0%,100% { transform: scale(1); opacity: 1; }
+  50%      { transform: scale(1.7); opacity: 0.3; }
+}
+@keyframes markerPingOuter {
+  0% { transform: scale(1); opacity: 0.8; }
+  100% { transform: scale(3.5); opacity: 0; }
+}
+</style>
+</head>
+<body>
+
+<div id="boot-screen">
+  <div class="scan-line-h"></div>
+  <div id="boot-terminal"></div>
+</div>
+
+<div class="status-bar">
+  <span>SYS ONLINE</span><div class="status-dot"></div>
+  <span id="clockDisplay">00:00:00</span><div class="status-dot"></div>
+  <span>CORE ACTIVE</span>
+</div>
+
+<div class="chat-container" id="chatContainer">
+  <div class="chat-header">
+    <span>CONSOLA NEURAL V5.4</span>
+    <span class="chat-close" onclick="toggleWindow()">&#10005;</span>
+  </div>
+  <div class="chat-messages" id="chatBox"></div>
+  <div class="chat-input-area">
+    <input type="text" class="chat-input" id="chatInput" placeholder="Pregunta lo que quieras..." onkeypress="handleEnter(event)" autocomplete="off">
+    <button class="chat-send" onclick="sendMsg()">EJECUTAR</button>
+  </div>
+</div>
+
+<!-- Bottom bar: sin botón mic cuadrado, apagar = cerrar Jarvis -->
+<div class="bottom-bar">
+  <!-- Chat / Consola -->
+  <button class="bottom-btn" onclick="toggleWindow()" title="Consola">
+    <svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/></svg>
+  </button>
+  <!-- Configuración — abre el diálogo Qt de config -->
+  <button class="bottom-btn" onclick="window.location.href='jarvis://cmd?text=__OPEN_CONFIG__'" title="Configuración">
+    <svg viewBox="0 0 24 24"><path d="M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.07-0.94l2.03-1.58c0.18-0.14,0.23-0.41,0.12-0.61 l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81c-0.04-0.24-0.24-0.41-0.48-0.41 h-3.84c-0.24,0-0.43,0.17-0.47,0.41L9.25,5.35C8.66,5.59,8.12,5.92,7.63,6.29L5.24,5.33c-0.22-0.08-0.47,0-0.59,0.22L2.74,8.87 C2.62,9.08,2.66,9.34,2.86,9.48l2.03,1.58C4.84,11.36,4.8,11.69,4.8,12s0.02,0.64,0.07,0.94l-2.03,1.58 c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54 c0.05,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.44-0.17,0.47-0.41l0.36-2.54c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96 c0.22,0.08,0.47,0,0.59-0.22l1.92-3.32c0.12-0.22,0.07-0.47-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6 s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z"/></svg>
+  </button>
+  <!-- Comandos -->
+  <button class="bottom-btn" onclick="window.location.href='jarvis://cmd?text=__OPEN_COMMANDS__'" title="Comandos">
+    <svg viewBox="0 0 24 24"><path d="M4 4h16v16H4V4zm2 3v2h8V7H6zm0 4v2h5v-2H6zm0 4v2h8v-2H6zm10-8h2v2h-2V7zm0 4h2v2h-2v-2zm0 4h2v2h-2v-2z"/></svg>
+  </button>
+  <!-- Extensiones: conexiones independientes -->
+  <button class="bottom-btn" onclick="window.location.href='jarvis://cmd?text=__OPEN_EXTENSIONS__'" title="Extensiones">
+    <svg viewBox="0 0 24 24"><path d="M20.5 11H19V7a2 2 0 0 0-2-2h-4V3.5a2.5 2.5 0 0 0-5 0V5H4a2 2 0 0 0-2 2v4h1.5a2.5 2.5 0 0 1 0 5H2v4a2 2 0 0 0 2 2h4v-1.5a2.5 2.5 0 0 1 5 0V22h4a2 2 0 0 0 2-2v-4h1.5a2.5 2.5 0 0 0 0-5z"/></svg>
+  </button>
+  <!-- Micrófono — en línea con los demás botones -->
+  <button class="bottom-btn" id="micBtn" title="Micrófono">
+    <svg viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/><path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>
+  </button>
+  <!-- Visor de pantalla en tiempo real -->
+  <button class="bottom-btn" onclick="window.location.href='jarvis://cmd?text=' + encodeURIComponent('ver pantalla')" title="Ver pantalla">
+    <svg viewBox="0 0 24 24"><path d="M21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h7v2H7v2h10v-2h-3v-2h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 14H3V5h18v12z"/></svg>
+  </button>
+</div>
+
+<!-- ── MAPA JARVIS ── -->
+<div id="mapa-overlay">
+    <div id="mapa-container">
+    <div id="mapa-header">
+      <span id="mapa-titulo">◈ SISTEMA DE NAVEGACIÓN — JARVIS</span>
+      <div style="display:flex;gap:8px;align-items:center;">
+        <button id="mapa-close" onclick="cerrarMapaJarvis()">[ × CERRAR ]</button>
+      </div>
+    </div>
+    <div id="mapa-div"></div>
+    <div id="mapa-sidebar" aria-hidden="true"></div>
+    <div id="mapa-scanline"></div>
+    <div id="mapa-vignette"></div>
+    <div class="mapa-corner" id="mc-tl"></div>
+    <div class="mapa-corner" id="mc-tr"></div>
+    <div class="mapa-corner" id="mc-bl"></div>
+    <div class="mapa-corner" id="mc-br"></div>
+  </div>
+</div>
+
+<div id="sidebar-tab" onclick="reabrirSidebar()" title="Reabrir panel de imágenes">Abrir imágenes</div>
+
+
+<canvas id="bg"></canvas>
+
+<div class="wrap" id="mainWrap">
+  <canvas id="main" width="750" height="750"></canvas>
+</div>
+<div class="voice-bars" id="voiceBars" style="position:fixed;bottom:84px;left:50%;transform:translateX(-50%);z-index:100;">
+  <div class="voice-bar"></div><div class="voice-bar"></div><div class="voice-bar"></div><div class="voice-bar"></div><div class="voice-bar"></div>
+</div>
+
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script>
+// ── MAPA JARVIS — Estética azul oscuro estilo película ──
+let _mapaL = null;
+
+// Tiles oscuros Stadia (CARTO Dark) — azul marino profundo como Iron Man/película
+// Fallback: CartoDB DarkMatter si Stadia falla
+const _TILE_URLS = [
+  // CartoDB Positron Dark — muy oscuro, calles en azul tenue
+  'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png',
+];
+
+window.mostrarMapaJarvis = function(lat, lon, nombre, infoHtml, showRingsFlag = false) {
+  const overlay = document.getElementById('mapa-overlay');
+  document.getElementById('mapa-titulo').textContent = '◈ ' + (nombre || 'TARGET').toUpperCase();
+  overlay.classList.add('visible');
+  if (typeof _bgPaused !== 'undefined') _bgPaused = true;
+
+  if (_mapaL) { _mapaL.remove(); _mapaL = null; }
+  document.getElementById('mapa-div').innerHTML = '';
+
+  // Extraer imágenes del infoHtml y prepararlas en la barra lateral
+  try {
+    const parser = new DOMParser();
+    const doc = parser.parseFromString(infoHtml || '', 'text/html');
+    const imgs = Array.from(doc.querySelectorAll('img')).map(i => i.src).filter(Boolean);
+    doc.querySelectorAll('img').forEach(n => n.remove());
+    infoHtml = doc.body.innerHTML || '';
+
+    const sidebar = document.getElementById('mapa-sidebar');
+    const reviewsLink = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(nombre || 'lugar')}`;
+    const header = `<div class="sb-header"><strong style="color:var(--primary);">Imágenes y reseñas</strong><button onclick="cerrarSidebar()" style="background:none;border:none;color:rgba(0,212,255,0.7);cursor:pointer;">Cerrar</button></div>`;
+
+    const renderImages = (imageList) => {
+      const imageCards = imageList.length
+        ? imageList.map(u => `<img src="${u}" onclick="window.open('${u}', '_blank', 'noopener,noreferrer')" alt="Lugar" />`).join('')
+        : `<div style="font-size:12px;color:#9adcff;line-height:1.4;">No encontré imágenes automáticas de inmediato. La ficha se actualizará con una foto si está disponible.</div>`;
+      sidebar.innerHTML = `${header}<div class="sb-images">${imageCards}</div>` +
+        `<div style="margin-top:10px;padding:10px;border:1px solid rgba(0,212,255,0.10);border-radius:10px;background:rgba(0,212,255,0.04);font-size:12px;color:#9adcff;line-height:1.4;">` +
+        `<strong style="color:#73d9ff;">Reseñas:</strong> <a href="${reviewsLink}" onclick="window.open('${reviewsLink}', '_blank', 'noopener,noreferrer'); return false;" style="color:#73d9ff;text-decoration:none;">Abrir reseñas en Google Maps</a></div>`;
+      sidebar.setAttribute('aria-hidden', 'false');
+      document.getElementById('mapa-div').style.width = 'calc(100% - 320px)';
+      document.getElementById('sidebar-tab').classList.remove('visible');
+    };
+
+    if (imgs.length) {
+      renderImages(imgs);
+    } else {
+      renderImages([]);
+      if (nombre) {
+        const query = encodeURIComponent(nombre.trim());
+        const wikiUrl = `https://en.wikipedia.org/w/api.php?action=query&titles=${query}&prop=pageimages&pithumbsize=600&format=json&origin=*`;
+        const commonsUrl = `https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=${query}&gsrlimit=4&prop=imageinfo&iiprop=url&format=json&origin=*`;
+
+        Promise.all([
+          fetch(wikiUrl).then(r => r.ok ? r.json() : null).catch(() => null),
+          fetch(commonsUrl).then(r => r.ok ? r.json() : null).catch(() => null)
+        ]).then(([wiki, commons]) => {
+          const imgs = [];
+          const wikiPages = wiki && wiki.query && wiki.query.pages ? Object.values(wiki.query.pages) : [];
+          const wikiThumb = wikiPages[0] && wikiPages[0].thumbnail && wikiPages[0].thumbnail.source;
+          if (wikiThumb) imgs.push(wikiThumb);
+          const commonsPages = commons && commons.query && commons.query.pages ? Object.values(commons.query.pages) : [];
+          for (const page of commonsPages) {
+            const url = page.imageinfo && page.imageinfo[0] && page.imageinfo[0].url;
+            if (url && !url.includes('.svg') && !imgs.includes(url)) imgs.push(url);
+          }
+          if (imgs.length) renderImages(imgs.slice(0, 6));
+        }).catch(e => console.warn('Place image fallback failed', e));
+      }
+    }
+  } catch(e) { console.warn('Procesar infoHtml falló', e); }
+
+  window._lastMapaState = { lat: lat, lon: lon, nombre: nombre, infoHtml: infoHtml, anillos: showRingsFlag };
+
+  // Determinar zoom según tipo de lugar (negocios/calles = más zoom)
+  const nombreLower = (nombre || '').toLowerCase();
+  let zoomLevel = 14;
+  const esLugarEspecifico = /calle|carrera|avenida|transversal|diagonal|cra|cl |av |kr |street|avenue|road|blvd|andrés|restaurante|hotel|parque|museo|aeropuerto/.test(nombreLower);
+  if (esLugarEspecifico) zoomLevel = 15;
+  else if (nombreLower.length > 25) zoomLevel = 15; // nombre largo = lugar específico
+
+  setTimeout(() => {
+    // Si el mapa ya existe, actualizar posición y marcador en vez de destruirlo
+    if (_mapaL) {
+      try {
+        _mapaL.setView([lat, lon], zoomLevel, { animate: true });
+        if (_mapaL._jarvis_marker) {
+          _mapaL._jarvis_marker.setLatLng([lat, lon]);
+          if (nombre) {
+            const popupContent = infoHtml
+              ? `<div style="font-size:12px;line-height:1.4;color:#eef9ff;">${infoHtml}</div>`
+              : `<span style="font-size:11px;letter-spacing:1px;">◈ ${nombre.toUpperCase()}</span>`;
+            _mapaL._jarvis_marker.getPopup() && _mapaL._jarvis_marker.getPopup().setContent(popupContent);
+            _mapaL._jarvis_marker.openPopup();
+          }
+        } else {
+          _mapaL._jarvis_marker = L.marker([lat, lon], { icon: icono }).addTo(_mapaL);
+        }
+        // Ajuste de tamaño sin POIs automáticos
+        _mapaL.invalidateSize();
+      } catch (e) { console.warn('Actualizar mapa falló:', e); }
+      return;
+    }
+
+    _mapaL = L.map('mapa-div', {
+      center: [lat, lon], zoom: zoomLevel,
+      zoomControl: true, attributionControl: false,
+    });
+
+    const CARTO_URL = 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png';
+    const OSM_URL = 'https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png';
+
+    // Robust tile provider selection with fallback list and tileerror handling
+    // Nota: Stadia Maps requiere API key, así que se omite
+    const TILE_PROVIDERS = [
+      {url: 'https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', opts:{subdomains:'abcd', maxZoom:22}},
+      {url: 'https://{s}.basemaps.cartocdn.com/dark_nolabels/{z}/{x}/{y}{r}.png', opts:{subdomains:'abcd', maxZoom:22}},
+    ];
+
+    let _tile_failures = 0;
+    let _tile_provider_index = 0;
+
+    function addTileProvider(index) {
+      const provider = TILE_PROVIDERS[index];
+      if (!provider) return null;
+      const layer = L.tileLayer(provider.url, {
+        maxZoom: provider.opts.maxZoom || 21,
+        minZoom: 1,
+        subdomains: provider.opts.subdomains || 'abc',
+        noWrap: false,
+        keepBuffer: 2,
+        updateWhenZooming: false,
+        updateWhenIdle: true,
+        unloadInvisibleTiles: true,
+        attribution: '',
+        crossOrigin: true,
+        detectRetina: true,
+      });
+
+      layer.on('tileerror', function(e) {
+        _tile_failures += 1;
+        console.warn('Tile error provider', index, 'failures', _tile_failures, e);
+        // If many tile errors, switch to next provider
+        if (_tile_failures >= 6) {
+          _tile_failures = 0;
+          _tile_provider_index = (_tile_provider_index + 1) % TILE_PROVIDERS.length;
+          try {
+            if (_mapaL && _mapaL._jarvis_tile_layer) {
+              _mapaL.removeLayer(_mapaL._jarvis_tile_layer);
+              _mapaL._jarvis_tile_layer = null;
+            }
+          } catch(e) { console.warn('Error removing old tile layer', e); }
+          const next = addTileProvider(_tile_provider_index);
+          if (next && _mapaL) next.addTo(_mapaL);
+        }
+      });
+      _mapaL._jarvis_tile_layer = layer;
+      return layer;
+    }
+
+    const initialLayer = addTileProvider(_tile_provider_index);
+    if (initialLayer) initialLayer.addTo(_mapaL);
+
+    setTimeout(() => {
+      const tilePanes = document.querySelectorAll('#mapa-div .leaflet-tile-pane');
+      tilePanes.forEach(p => {
+        p.style.filter = 'none';
+        p.style.imageRendering = 'auto';
+        p.style.opacity = '1';
+      });
+    }, 150);
+
+    const icono = L.divIcon({
+      className: '',
+      html: `<div style="position:relative;display:flex;align-items:center;justify-content:center;width:32px;height:32px;">
+        <div style="position:absolute;width:32px;height:32px;border-radius:50%;
+          border:1.5px solid rgba(0,212,255,0.4);
+          animation:markerPingOuter 2.2s ease-out infinite;"></div>
+        <div style="position:absolute;width:18px;height:18px;border-radius:50%;
+          border:1px solid rgba(0,212,255,0.7);
+          animation:markerPing 1.6s ease-in-out infinite;"></div>
+        <div style="width:7px;height:7px;border-radius:50%;
+          background:#00d4ff;
+          box-shadow:0 0 8px #00d4ff,0 0 18px rgba(0,212,255,0.8),0 0 35px rgba(0,212,255,0.4);"></div>
+      </div>`,
+      iconSize: [32, 32],
+      iconAnchor: [16, 16],
+    });
+    const marker = L.marker([lat, lon], { icon: icono }).addTo(_mapaL);
+
+    showRings = showRingsFlag;
+
+    // Popup con nombre del lugar o detalles adicionales
+    if (nombre) {
+      const popupContent = infoHtml
+        ? `<div style="font-size:12px;line-height:1.4;color:#eef9ff;">${infoHtml}</div>`
+        : `<span style="font-size:11px;letter-spacing:1px;">◈ ${nombre.toUpperCase()}</span>`;
+      marker.bindPopup(popupContent, { closeButton: false }).openPopup();
+    }
+
+    if (!_mapaL._jarvis_poi_layer) {
+      _mapaL._jarvis_poi_layer = L.layerGroup().addTo(_mapaL);
+      _mapaL._jarvis_clear_pois = () => { _mapaL._jarvis_poi_layer.clearLayers(); };
+    }
+
+    const schedulePoiLoad = () => {
+      if (window._jarvisPoiTimeout) clearTimeout(window._jarvisPoiTimeout);
+      window._jarvisPoiTimeout = setTimeout(() => {}, 300);
+    };
+
+    _mapaL.off('zoomend moveend');
+    _mapaL.on('zoomend moveend', schedulePoiLoad);
+  }, 200);
+};
+
+async function loadJarvisPois() {
+  if (!_mapaL) return;
+  const z = _mapaL.getZoom();
+  if (z < 14) { if (_mapaL._jarvis_clear_pois) _mapaL._jarvis_clear_pois(); return; }
+  const center = _mapaL.getCenter();
+  const radius = Math.min(1600, Math.round(450 * Math.pow(1.25, z - 14)));
+  const overpassQ = `[out:json][timeout:30];(` +
+    `node(around:${radius},${center.lat},${center.lng})["amenity"];` +
+    `way(around:${radius},${center.lat},${center.lng})["amenity"];` +
+    `node(around:${radius},${center.lat},${center.lng})["shop"];` +
+    `way(around:${radius},${center.lat},${center.lng})["shop"];` +
+    `node(around:${radius},${center.lat},${center.lng})["tourism"];` +
+    `way(around:${radius},${center.lat},${center.lng})["tourism"];` +
+    `node(around:${radius},${center.lat},${center.lng})["leisure"];` +
+    `way(around:${radius},${center.lat},${center.lng})["leisure"];` +
+    `node(around:${radius},${center.lat},${center.lng})["historic"];` +
+    `way(around:${radius},${center.lat},${center.lng})["historic"];` +
+  `);out center;`;
+  try {
+    const res = await fetch('https://overpass-api.de/api/interpreter', { method: 'POST', body: overpassQ });
+    const data = await res.json();
+    if (!data.elements) return;
+    if (_mapaL._jarvis_clear_pois) _mapaL._jarvis_clear_pois();
+
+    // Pool de requests para evitar lag (máximo 3 simultáneas)
+    let activeRequests = 0;
+    const maxParallel = 3;
+    const queue = [];
+
+    const processQueue = async () => {
+      if (queue.length === 0 || activeRequests >= maxParallel) return;
+      activeRequests++;
+      const task = queue.shift();
+      try {
+        await task();
+      } catch (e) {
+        console.warn('Task failed:', e.message);
+      } finally {
+        activeRequests--;
+        processQueue();
+      }
+    };
+
+    data.elements.forEach(el => {
+      const elLat = el.lat || (el.center && el.center.lat);
+      const elLon = el.lon || (el.center && el.center.lon);
+      if (!elLat || !elLon) return;
+      const name = (el.tags && (el.tags.name || el.tags['addr:housename'])) || null;
+      const tipo = (el.tags && (el.tags.amenity || el.tags.shop || el.tags.tourism)) || 'punto de interés';
+      const smallIcon = L.circleMarker([elLat, elLon], { radius: 6, color: '#00d4ff', fillColor: '#00d4ff', fillOpacity: 0.95, weight:1 });
+      const searchName = name && name.length > 2 ? name : `${tipo}`;
+      let mapsLink = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(searchName)}`;
+      let content = `<div style="max-width:240px;"><strong style="font-size:12px;color:#eef9ff;">${name ? name : tipo}</strong><br><small style="color:#9adcff;">${tipo}</small><br><a href='#' onclick="jarvisOpenUrl('${encodeURIComponent(mapsLink)}');return false;" style='color:#73d9ff;text-decoration:none;'>Ver en Google Maps</a></div>`;
+      smallIcon.bindPopup(content);
+      // Almacenar referencia para posible enriquecimiento (imagen, reseñas)
+      _mapaL._jarvis_poi_layer.addLayer(smallIcon);
+      // Al abrir popup, actualizar sidebar con enlace a reseñas
+      smallIcon.on('click', () => {
+        const sidebar = document.getElementById('mapa-sidebar');
+        const reviewsHtml = `<div style="margin-top:8px;font-size:12px;color:#9adcff;"><strong>Reseñas:</strong> <a href='${mapsLink}' onclick="jarvisOpenUrl('${encodeURIComponent(mapsLink)}');return false;" style='color:#73d9ff;text-decoration:none;'>Ver reseñas en Google Maps</a></div>`;
+        // Mantener sección de imágenes y añadir reseñas
+        const existing = sidebar.innerHTML || '';
+        if (existing) {
+          // Insert or replace reseñas block
+          if (existing.includes('Reseñas:')) {
+            sidebar.innerHTML = existing.replace(/<div style="margin-top:8px;font-size:12px;color:#9adcff;">[\s\S]*?<\/div>/, reviewsHtml);
+          } else {
+            sidebar.innerHTML = existing + reviewsHtml;
+          }
+          sidebar.setAttribute('aria-hidden','false');
+        } else {
+          sidebar.innerHTML = `<div class="sb-header"><strong style="color:var(--primary);">Detalles</strong><button onclick="cerrarSidebar()" style="background:none;border:none;color:rgba(0,212,255,0.7);cursor:pointer;">Cerrar</button></div>${reviewsHtml}`;
+          sidebar.setAttribute('aria-hidden','false');
+          document.getElementById('mapa-div').style.width = 'calc(100% - 320px)';
+        }
+      });
+
+      const wd = el.tags && (el.tags.wikidata || el.tags['brand:wikidata']);
+
+      // Búsqueda de imágenes DESHABILITADA TEMPORALMENTE (causaba spam)
+      // Se habilitará cuando funcione correctamente
+    });
+
+    // Procesar cola
+    for (let i = 0; i < maxParallel; i++) {
+      processQueue();
+    }
+    // Intentar obtener imágenes para algunos POIs desde Wikimedia Commons (limitado, gratuito)
+    (async function fetchPoiImagesLimited() {
+      try {
+        const pois = data.elements.filter(el => (el.tags && (el.tags.name || el.tags.wikidata || el.tags['brand:wikidata'])) ).slice(0, 6);
+        const sidebar = document.getElementById('mapa-sidebar');
+        let added = 0;
+        for (const el of pois) {
+          if (added >= 8) break;
+          const queryName = (el.tags && (el.tags.name || el.tags['brand'])) || el.tags && el.tags.amenity || '';
+          if (!queryName) continue;
+          
+          let imgUrl = null;
+          
+          try {
+            // Estrategia 1: Wikidata si existe ID
+            if (el.tags && el.tags.wikidata && !imgUrl) {
+              try {
+                const wdUrl = `https://www.wikidata.org/w/api.php?action=wbgetclaims&entity=${el.tags.wikidata}&property=P18&format=json&origin=*`;
+                const wdResp = await Promise.race([fetch(wdUrl), new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000))]);
+                if (wdResp.ok) {
+                  const wdData = await wdResp.json();
+                  const claims = wdData.claims && wdData.claims.P18 ? wdData.claims.P18 : [];
+                  if (claims.length > 0) {
+                    const filename = claims[0].mainsnak.datavalue.value;
+                    imgUrl = `https://commons.wikimedia.org/wiki/Special:FilePath/${encodeURIComponent(filename)}?width=200`;
+                  }
+                }
+              } catch(e) { console.warn('Wikidata lookup skipped'); }
+            }
+            
+            // Estrategia 2: Wikimedia Commons directo
+            if (!imgUrl) {
+              try {
+                const commonsUrl = 'https://commons.wikimedia.org/w/api.php?action=query&generator=search&gsrsearch=' + encodeURIComponent(queryName) + '&gsrlimit=3&prop=imageinfo&iiprop=url&format=json&origin=*';
+                const r = await Promise.race([fetch(commonsUrl), new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 4000))]);
+                if (r.ok) {
+                  const j = await r.json();
+                  const pages = j.query && j.query.pages ? Object.values(j.query.pages) : [];
+                  for (const page of pages) {
+                    const imginfo = page.imageinfo;
+                    if (!imginfo || !imginfo.length) continue;
+                    const url = imginfo[0].url;
+                    if (url && !url.includes('.svg')) { imgUrl = url; break; }
+                  }
+                }
+              } catch(e) { console.warn('Commons lookup skipped'); }
+            }
+            
+            // Estrategia 3: Wikipedia si existe artículo
+            if (!imgUrl && el.tags && el.tags.wikipedia) {
+              try {
+                const wikiTitle = el.tags.wikipedia.split(':')[1];
+                const wikiUrl = `https://en.wikipedia.org/w/api.php?action=query&titles=${encodeURIComponent(wikiTitle)}&prop=pageimages&pithumbsize=300&format=json&origin=*`;
+                const wResp = await Promise.race([fetch(wikiUrl), new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 3000))]);
+                if (wResp.ok) {
+                  const wData = await wResp.json();
+                  const pages = wData.query.pages ? Object.values(wData.query.pages) : [];
+                  if (pages[0] && pages[0].thumbnail) imgUrl = pages[0].thumbnail.source;
+                }
+              } catch(e) { console.warn('Wikipedia lookup skipped'); }
+            }
+            
+            if (!imgUrl) continue;
+            
+            const imgEl = `<img src="${imgUrl}" alt="${encodeURIComponent(queryName)}" onclick="jarvisOpenUrl('${encodeURIComponent(imgUrl)}');" onerror="this.style.display='none'" style="max-height:160px;border-radius:4px;" />`;
+            if (sidebar && sidebar.getAttribute('aria-hidden') === 'false') {
+              const imagesDiv = sidebar.querySelector('.sb-images');
+              if (imagesDiv) imagesDiv.insertAdjacentHTML('beforeend', imgEl);
+            } else {
+              sidebar.innerHTML = `<div class="sb-header"><strong style="color:var(--primary);">Imágenes</strong><button onclick="cerrarSidebar()" style="background:none;border:none;color:rgba(0,212,255,0.7);cursor:pointer;">Cerrar</button></div><div class="sb-images">${imgEl}</div>`;
+              sidebar.setAttribute('aria-hidden','false');
+              document.getElementById('mapa-div').style.width = 'calc(100% - 320px)';
+            }
+            added++;
+          } catch(e) { console.warn('Image fetch error:', e); }
+        }
+      } catch(e) { console.warn('fetchPoiImagesLimited failed', e); }
+    })();
+  } catch (e) { console.warn('Overpass POI fetch failed', e); }
+}
+
+window.cerrarMapaJarvis = function() {
+  document.getElementById('mapa-overlay').classList.remove('visible');
+  if (_mapaL) { _mapaL.remove(); _mapaL = null; }
+  if (typeof _bgPaused !== 'undefined') _bgPaused = false;
+};
+
+document.addEventListener('keydown', e => {
+  if(e.key === 'Escape'){
+    window.cerrarMapaJarvis();
+  }
+});
+
+function toggleSidebar() {
+  const sidebar = document.getElementById('mapa-sidebar');
+  const tab = document.getElementById('sidebar-tab');
+  const mapDiv = document.getElementById('mapa-div');
+  if (sidebar.getAttribute('aria-hidden') === 'false') {
+    sidebar.setAttribute('aria-hidden', 'true');
+    mapDiv.style.width = '100%';
+    tab.classList.add('visible');
+  } else {
+    sidebar.setAttribute('aria-hidden', 'false');
+    mapDiv.style.width = 'calc(100% - 320px)';
+    if (_mapaL) _mapaL.invalidateSize();
+    tab.classList.remove('visible');
+  }
+}
+
+function reabrirSidebar() {
+  const sidebar = document.getElementById('mapa-sidebar');
+  const tab = document.getElementById('sidebar-tab');
+  sidebar.setAttribute('aria-hidden', 'false');
+  document.getElementById('mapa-div').style.width = 'calc(100% - 320px)';
+  if (_mapaL) _mapaL.invalidateSize();
+  tab.classList.remove('visible');
+}
+
+function cerrarSidebar() {
+  const sidebar = document.getElementById('mapa-sidebar');
+  sidebar.setAttribute('aria-hidden','true');
+  document.getElementById('mapa-div').style.width = '100%';
+  document.getElementById('sidebar-tab').classList.add('visible');
+  if (_mapaL) _mapaL.invalidateSize();
+}
+</script>
+
+<script>
+// ── Variables Globales ──
+const mainCanvas = document.getElementById('main');
+let mouseX = window.innerWidth / 2, mouseY = window.innerHeight / 2;
+// OPTIMIZACIÓN: Remover evento mousemove global para evitar HUD azul constante
+// (Los hexágonos iluminados al mover el mouse causaban el HUD azul)
+
+// ── Sistema de Ondas de Choque ──
+let shockwaves = [];
+
+// ── Secuencia de Arranque ──
+const bootLogs = ["> ESTABLECIENDO ENLACE CUÁNTICO...", "> DESENCRIPTANDO RUTINAS BASE...", "> CARGANDO RED NEURAL CONVOLUCIONAL...", "> PROTOCOLO JARVIS V5.4 EN LÍNEA."];
+const terminal = document.getElementById('boot-terminal'), bootScreen = document.getElementById('boot-screen');
+let systemReady = false;
+
+setTimeout(() => {
+  bootScreen.style.opacity = '0'; bootScreen.style.visibility = 'hidden';
+  systemReady = true; animate();
+  setTimeout(() => appendMessage("Sistemas operativos al 100%. Protocolos de seguridad activados. A su disposición, señor.", 'ai', true), 1000);
+}, 3500);
+
+let logIndex = 0;
+function printBootLogs() {
+  if (logIndex < bootLogs.length) {
+    terminal.innerHTML += `<div>${bootLogs[logIndex]}</div>`; logIndex++;
+    setTimeout(printBootLogs, 300 + Math.random() * 400);
+  } else { terminal.innerHTML += `<div class="boot-cursor"></div>`; }
+}
+window.onload = printBootLogs;
+
+function triggerAgent(displayName, commandId) {
+  if (commandId === 'cerrar_jarvis') {
+    window.location.href = "jarvis://cmd?text=" + encodeURIComponent("cerrar jarvis");
+    return;
+  }
+  if (commandId === 'config_open') {
+    window.location.href = "jarvis://cmd?text=" + encodeURIComponent("configuracion");
+    return;
+  }
+  window.location.href = "jarvis://cmd?text=" + encodeURIComponent(commandId);
+}
+
+// ── Lógica del Chat ──
+const chatContainer = document.getElementById('chatContainer'), mainWrap = document.getElementById('mainWrap');
+const chatBox = document.getElementById('chatBox'), chatInput = document.getElementById('chatInput');
+
+function toggleWindow() {
+  const isActive = chatContainer.classList.contains('active');
+  if (isActive) {
+    chatContainer.classList.remove('active');
+    mainWrap.classList.remove('widget-mode');
+    mainCanvas.style.transform = `rotateY(0deg) rotateX(0deg)`;
+    _bgPaused = false;
+  } else {
+    mainWrap.classList.add('widget-mode');
+    chatContainer.classList.add('active');
+    mainCanvas.style.transform = `none`;
+    _bgPaused = true;
+    setTimeout(() => chatInput.focus(), 300);
+  }
+}
+
+function handleEnter(e) { if (e.key === 'Enter') sendMsg(); }
+
+// ── Efecto Ciber-Desencriptación ──
+const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()";
+function cyberDecodeEffect(element, finalString, speed = 30) {
+  let iteration = 0;
+  let interval = setInterval(() => {
+    element.innerText = finalString.split("").map((letter, index) => {
+      if(index < iteration) return finalString[index];
+      if(finalString[index] === " ") return " ";
+      return letters[Math.floor(Math.random() * letters.length)];
+    }).join("");
+    if(iteration >= finalString.length) { clearInterval(interval); }
+    iteration += 1/2;
+    chatBox.scrollTop = chatBox.scrollHeight;
+  }, speed);
+  return interval;
+}
+
+function appendMessage(text, sender, typewrite = false) {
+  const msgDiv = document.createElement('div'); msgDiv.className = `msg ${sender}`;
+  const time = new Date().toLocaleTimeString('es-ES', {hour: '2-digit', minute: '2-digit'});
+  chatBox.appendChild(msgDiv);
+
+  if (typewrite) {
+    const plainText = text.replace(/<[^>]*>?/gm, '');
+    msgDiv.innerHTML = `<span class="text-content"></span><span class="ai-typing-cursor"></span><span class="msg-time">SYS</span>`;
+    const textSpan = msgDiv.querySelector('.text-content');
+    const cursorEl = msgDiv.querySelector('.ai-typing-cursor');
+    const interval = cyberDecodeEffect(textSpan, plainText, 25);
+    setTimeout(() => { cursorEl.style.display = 'none'; }, plainText.length * 25 * 2 + 100);
+  } else {
+    msgDiv.innerHTML = `${text} <span class="msg-time">${time}</span>`;
+    setTimeout(() => { chatBox.scrollTop = chatBox.scrollHeight; }, 50);
+  }
+}
+
+function sendMsg() {
+  const text = chatInput.value.trim(); if(!text) return;
+  appendMessage(text, 'user'); chatInput.value = '';
+  // Pausar animaciones temporalmente para evitar parpadeo
+  const previousAnimation = mainCanvas.style.animation;
+  mainCanvas.style.animation = 'none';
+  const previousOpacity = bgCanvas.style.opacity;
+  bgCanvas.style.opacity = '0.7';
+  setTimeout(() => {
+    mainCanvas.style.animation = previousAnimation;
+    bgCanvas.style.opacity = previousOpacity || '';
+    window.location.href = "jarvis://cmd?text=" + encodeURIComponent(text);
+  }, 120);
+}
+
+let _lastMsgHash = '';
+let _lastMsgTime = 0;
+window.__jarvisPendingMessages = [];
+window.__jarvisReady = false;
+
+window.jarvisAppendHtmlDirect = function(htmlContent) {
+  const payload = String(htmlContent || '');
+  const root = document.getElementById('chatBox');
+  if (!root) {
+    window.__jarvisPendingMessages = window.__jarvisPendingMessages || [];
+    window.__jarvisPendingMessages.push(payload);
+    console.warn('[V5] chatBox missing, queuing payload len=' + payload.length);
+    return false;
+  }
+
+  const now = Date.now();
+  const hash = payload.substring(0, 120);
+  if (hash === _lastMsgHash && (now - _lastMsgTime) < 800) return true;
+  _lastMsgHash = hash;
+  _lastMsgTime = now;
+
+  const msgDiv = document.createElement('div');
+  msgDiv.className = 'msg ai';
+  const time = new Date().toLocaleTimeString('es-ES', {hour: '2-digit', minute: '2-digit'});
+  msgDiv.innerHTML = payload + `<span class="msg-time">${time}</span>`;
+  root.appendChild(msgDiv);
+  setTimeout(() => { root.scrollTop = root.scrollHeight; }, 50);
+  return true;
+};
+
+window.jarvisEnqueueMessage = function(htmlContent) {
+  return window.jarvisAppendHtmlDirect(htmlContent);
+};
+
+function appendJarvisMessage(htmlContent) {
+  return window.jarvisAppendHtmlDirect(htmlContent);
+}
+
+window.addEventListener('DOMContentLoaded', () => {
+  window.__jarvisReady = true;
+  const pending = window.__jarvisPendingMessages || [];
+  while (pending.length) {
+    const next = pending.shift();
+    window.jarvisAppendHtmlDirect(next);
+  }
+});
+
+// ── FONDO: Hexágonos, Plexus, Shockwaves ──
+const bgCanvas = document.getElementById('bg'), bgCtx = bgCanvas.getContext('2d');
+let pColor = "#00d4ff", sColor = "#ffffff";
+let _bgPaused = false;
+
+
+function resizeBgCanvas() {
+  const w = window.innerWidth, h = window.innerHeight;
+  if (bgCanvas.width !== w || bgCanvas.height !== h) {
+    bgCanvas.width = w;
+    bgCanvas.height = h;
+  }
+}
+window.addEventListener('resize', resizeBgCanvas);
+resizeBgCanvas();
+
+const dataNodes = Array.from({length: 45}, () => ({
+  x: Math.random() * window.innerWidth, y: Math.random() * window.innerHeight,
+  vx: (Math.random() - 0.5) * 0.5, vy: (Math.random() - 0.5) * 0.5
+}));
+
+function drawHexagon(ctx, x, y, r) {
+  ctx.beginPath();
+  for (let i = 0; i < 6; i++) {
+    const angle = (Math.PI / 3) * i;
+    const hx = x + r * Math.cos(angle), hy = y + r * Math.sin(angle);
+    if (i === 0) ctx.moveTo(hx, hy); else ctx.lineTo(hx, hy);
+  }
+  ctx.closePath(); ctx.stroke();
+}
+
+let timeCycle = 0;
+
+function updateAndDrawBg() {
+  if (_bgPaused) return;
+  timeCycle += 0.02;
+  bgCtx.clearRect(0, 0, bgCanvas.width, bgCanvas.height);
+
+  const cx = bgCanvas.width/2, cy = bgCanvas.height/2, maxR = Math.sqrt(cx*cx + cy*cy);
+  const vignette = bgCtx.createRadialGradient(cx,cy,0,cx,cy,maxR);
+  vignette.addColorStop(0, 'rgba(0,0,0,0)'); vignette.addColorStop(0.5, 'rgba(0,0,0,0.3)'); vignette.addColorStop(1, 'rgba(0,0,0,0.95)');
+  bgCtx.fillStyle = vignette; bgCtx.fillRect(0, 0, bgCanvas.width, bgCanvas.height);
+
+  bgCtx.lineWidth = 1;
+  const hexSize = 35, dx = hexSize * Math.sqrt(3), dy = hexSize * 1.5;
+  const cols = Math.ceil(bgCanvas.width / dx) + 1, rows = Math.ceil(bgCanvas.height / dy) + 1;
+
+  for (let row = -1; row < rows; row++) {
+    for (let col = -1; col < cols; col++) {
+      const x = col * dx + (row % 2 === 0 ? 0 : dx / 2), y = row * dy;
+      // OPTIMIZACIÓN: Remover distToMouse - causaba HUD azul y parpadeos constantes
+      const breathingWave = Math.sin(timeCycle + x * 0.005 + y * 0.005) * 0.03;
+      let hexAlpha = 0.03 + breathingWave;
+      shockwaves.forEach(sw => {
+        const distToRipple = Math.abs(Math.hypot(x - sw.x, y - sw.y) - sw.radius);
+        if(distToRipple < 40) hexAlpha += (40 - distToRipple)/40 * sw.alpha * 0.4;
+      });
+      if(hexAlpha > 0) {
+        bgCtx.strokeStyle = `rgba(0, 212, 255, ${Math.max(0, hexAlpha)})`;
+        drawHexagon(bgCtx, x, y, hexSize * (1 + breathingWave*0.5));
+      }
+    }
+  }
+
+  for(let i = shockwaves.length - 1; i >= 0; i--) {
+    let sw = shockwaves[i];
+    bgCtx.beginPath(); bgCtx.arc(sw.x, sw.y, sw.radius, 0, Math.PI * 2);
+    bgCtx.lineWidth = 2; bgCtx.strokeStyle = `rgba(0, 212, 255, ${sw.alpha * 0.5})`; bgCtx.stroke();
+    bgCtx.beginPath(); bgCtx.arc(sw.x, sw.y, sw.radius * 0.8, 0, Math.PI * 2);
+    bgCtx.lineWidth = 1; bgCtx.strokeStyle = `rgba(255, 255, 255, ${sw.alpha * 0.2})`; bgCtx.stroke();
+    sw.radius += sw.speed; sw.alpha -= 0.015;
+    if(sw.alpha <= 0) shockwaves.splice(i, 1);
+  }
+
+  for (let i = 0; i < dataNodes.length; i++) {
+    let node = dataNodes[i];
+    node.x += node.vx; node.y += node.vy;
+    if(node.x < 0 || node.x > bgCanvas.width) node.vx *= -1;
+    if(node.y < 0 || node.y > bgCanvas.height) node.vy *= -1;
+    for (let j = i + 1; j < dataNodes.length; j++) {
+      let node2 = dataNodes[j];
+      let dist = Math.hypot(node.x - node2.x, node.y - node2.y);
+      if (dist < 150) {
+        bgCtx.beginPath(); bgCtx.moveTo(node.x, node.y); bgCtx.lineTo(node2.x, node2.y);
+        bgCtx.strokeStyle = `rgba(0, 212, 255, ${0.15 * (1 - dist/150)})`; bgCtx.stroke();
+      }
+    }
+    // OPTIMIZACIÓN: Remover conexiones al mouse para eliminar HUD azul completamente
+    bgCtx.fillStyle = 'rgba(0, 212, 255, 0.4)';
+    bgCtx.shadowBlur = 0;
+    bgCtx.beginPath(); bgCtx.arc(node.x, node.y, 2, 0, Math.PI*2); bgCtx.fill();
+  }
+}
+window.addEventListener('resize', updateAndDrawBg);
+
+// ── Core Animations Jarvis ──
+const c = document.getElementById('main'), ctx = c.getContext('2d');
+const W = 750, H = 750, CX = 375, CY = 375;
+let boot = 0, listening = false, voiceLerp = 0, ampSmooth = 0;
+let globalSpeed = 0.35, globalScale = 1.0, globalPulse = 1.0;
+const easeOutQuart = t => 1 - (--t)*t*t*t;
+
+const rings = [
+  { r: 64, lw: 2.2, spd: 0.008, dash: [24, 18], glow: true, color: () => `rgba(0,212,255,0.55)` },
+  { r: 104, lw: 1.4, spd: 0.005, dash: [18, 14], glow: false, color: () => `rgba(0,212,255,0.28)` },
+  { r: 150, lw: 1.0, spd: 0.003, dash: [12, 10], glow: false, color: () => `rgba(0,212,255,0.16)` },
+];
+const ringOffsets = rings.map(() => Math.random() * Math.PI * 2);
+let showRings = false;
+function toggleRings(){
+  showRings = !showRings;
+}
+let tickOffset = 0;
+
+function hexToRgba(hex, alpha) {
+  const r = parseInt(hex.slice(1,3),16), g = parseInt(hex.slice(3,5),16), b = parseInt(hex.slice(5,7),16); return `rgba(${r},${g},${b},${alpha})`;
+}
+
+function drawRings(amp, progress) {
+  if(!showRings) return; // early return when rings are disabled
+  voiceLerp += (listening ? 1 - voiceLerp : 0 - voiceLerp) * 0.06; tickOffset += 0.0004 * globalSpeed;
+  rings.forEach((ring, i) => {
+    const delay = i * 0.08, ringP = Math.max(0, Math.min(1, (progress - delay) * 2.5)); if(ringP <= 0) return;
+    const easedP = easeOutQuart(ringP); ringOffsets[i] += ring.spd * globalSpeed;
+    ctx.save(); ctx.translate(CX, CY); ctx.rotate(ringOffsets[i]);
+    const breathe = Math.sin(Date.now()*0.001 + i*0.7) * 0.8 * globalPulse;
+    const r = ring.r * easedP * globalScale + (ring.glow ? breathe * voiceLerp : 0), circum = 2 * Math.PI * r;
+    ctx.setLineDash(ring.dash ? ring.dash : [circum]); ctx.lineDashOffset = circum * (1 - easedP);
+    ctx.globalAlpha = easedP * 0.85; ctx.beginPath(); ctx.arc(0, 0, r, 0, Math.PI * 2);
+    ctx.strokeStyle = ring.color(); ctx.lineWidth = ring.lw;
+    if(ring.glow) { ctx.shadowColor = pColor; ctx.shadowBlur = 10 + amp * 20 * voiceLerp; }
+    ctx.stroke(); ctx.restore();
+  });
+}
+
+function drawCore(amp, progress) {
+  const p = Math.max(0, Math.min(1, (progress - 0.8) * 4)); if(p <= 0) return;
+  const easedP = easeOutQuart(p);
+  const ambR = 130 * easedP * globalScale, amb = ctx.createRadialGradient(CX,CY,0,CX,CY,ambR);
+  amb.addColorStop(0, hexToRgba(pColor, listening ? 0.18 : 0.08)); amb.addColorStop(0.5, hexToRgba(pColor, 0.03)); amb.addColorStop(1, 'rgba(0,0,0,0)');
+  ctx.beginPath(); ctx.arc(CX,CY,ambR,0,Math.PI*2); ctx.fillStyle = amb; ctx.fill();
+
+  if(voiceLerp > 0.01) {
+    const vR = (80 + amp * 60 * voiceLerp) * globalScale, vg = ctx.createRadialGradient(CX,CY,0,CX,CY,vR);
+    vg.addColorStop(0, hexToRgba(pColor, 0.35 * voiceLerp)); vg.addColorStop(0.6, hexToRgba(pColor, 0.08 * voiceLerp)); vg.addColorStop(1, 'rgba(0,0,0,0)');
+    ctx.beginPath(); ctx.arc(CX,CY,vR,0,Math.PI*2); ctx.fillStyle = vg; ctx.fill();
+  }
+  const dotR = 3 + amp * 6 * voiceLerp;
+  ctx.save(); ctx.globalAlpha = easedP * 0.9; ctx.fillStyle = pColor; ctx.shadowColor = sColor; ctx.shadowBlur = 25;
+  ctx.beginPath(); ctx.arc(CX,CY,dotR,0,Math.PI*2); ctx.fill(); ctx.restore();
+
+  if(p > 0.65) {
+    const textAlpha = Math.min(1, (p - 0.65) / 0.35);
+    ctx.save(); ctx.globalAlpha = textAlpha; ctx.textAlign = 'center'; ctx.textBaseline = 'middle'; ctx.shadowColor = pColor;
+    ctx.shadowBlur = 20; ctx.fillStyle = sColor; ctx.font = 'bold 38px "Tw Cen MT","TwCenMT","Century Gothic",sans-serif'; ctx.letterSpacing = '8px';
+    ctx.fillText('JARVIS', CX + 4, CY);
+    ctx.globalAlpha = textAlpha * 0.4; ctx.font = '9px "Share Tech Mono",monospace'; ctx.letterSpacing = '3px';
+    ctx.shadowBlur = 5; ctx.fillStyle = pColor; ctx.fillText('v5.4', CX + 4, CY + 22); ctx.restore();
+  }
+}
+
+let audioCtx, analyser, dataArr;
+function getAmp() {
+  if(!listening || !analyser) return 0;
+  analyser.getByteFrequencyData(dataArr); let s = 0;
+  for(let i = 0; i < 20; i++) s += dataArr[i];
+  return (s/20) / 128;
+}
+
+function updateClock() {
+  const now = new Date(), hh = String(now.getHours()).padStart(2,'0'), mm = String(now.getMinutes()).padStart(2,'0'), ss = String(now.getSeconds()).padStart(2,'0');
+  document.getElementById('clockDisplay').textContent = `${hh}:${mm}:${ss}`;
+}
+setInterval(updateClock, 1000); updateClock();
+
+function animate() {
+  if(!systemReady) return;
+  if(boot < 3) boot += 0.005;
+  const rawAmp = getAmp(); ampSmooth += (rawAmp - ampSmooth) * 0.12;
+  if (!_bgPaused) updateAndDrawBg();
+  ctx.clearRect(0,0,W,H);
+  drawRings(ampSmooth, boot); drawCore(ampSmooth, boot);
+  requestAnimationFrame(animate);
+}
+
+const micBtn = document.getElementById('micBtn'), voiceBars = document.getElementById('voiceBars');
+micBtn.onclick = async (e) => {
+  e.stopPropagation();
+  listening = !listening;
+  micBtn.classList.toggle('active', listening);
+  voiceBars.classList.toggle('active', listening);
+  window.location.href = "jarvis://cmd?text=" + encodeURIComponent("iniciar_escucha_microfono");
+};
+</script>
+</body>
+</html>
