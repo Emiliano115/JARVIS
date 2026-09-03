@@ -53,4 +53,4 @@ Jarvis pedira permisos locales por capacidad. Google se autoriza por OAuth y el 
 
 ## Actualizaciones
 
-Jarvis comprueba en segundo plano si existe un GitHub Release posterior y muestra un enlace. La actualización no reemplaza el `.exe` automáticamente: cierra Jarvis, descarga el ZIP nuevo desde Releases, extrae la carpeta completa y reemplaza la instalación anterior. La configuración y memoria se conservan en `%LOCALAPPDATA%\Jarvis`.
+Jarvis comprueba en segundo plano si existe un GitHub Release posterior. Si encuentra uno, descarga el ZIP en `%LOCALAPPDATA%\Jarvis\updates`, pide confirmacion y reinicia para reemplazar la carpeta del programa. No tienes que buscar ni descargar el ZIP manualmente. La configuracion, memoria y tokens se conservan en `%LOCALAPPDATA%\Jarvis`.

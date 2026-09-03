@@ -31,7 +31,7 @@ from __future__ import annotations
 # =============================================================================
 # 1. IMPORTS Y RUTAS
 # =============================================================================
-import sys, os, re, json, threading, time, unicodedata, random, shutil, sqlite3, wave, webbrowser
+import sys, os, re, json, threading, time, unicodedata, random, shutil, sqlite3, wave, webbrowser, zipfile, tempfile, subprocess
 from datetime import datetime, timedelta
 from urllib.parse import urlparse, parse_qs
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -174,7 +174,7 @@ GROQ_BASE_URL  = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL     = "llama-3.3-70b-versatile"
 ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_MODEL    = "claude-sonnet-4-20250514"
-JARVIS_VERSION     = "1.0.3"
+JARVIS_VERSION     = "1.0.4"
 JARVIS_GITHUB_REPO = "Emiliano115/JARVIS"
 
 # =============================================================================
@@ -233,8 +233,11 @@ def cargar_modos_extra():
             pass
 
 
+_actualizacion_pendiente = None
+
+
 def _comprobar_actualizacion():
-    """Avisa de un release nuevo; nunca reemplaza el ejecutable en silencio."""
+    """Busca y prepara en segundo plano el siguiente release de GitHub."""
     try:
         respuesta = requests.get(
             f"https://api.github.com/repos/{JARVIS_GITHUB_REPO}/releases/latest",
@@ -248,14 +251,53 @@ def _comprobar_actualizacion():
         def version(valor):
             return tuple(int(parte) for parte in re.findall(r"\d+", valor)[:3]) or (0,)
         if version(tag) > version(JARVIS_VERSION):
-            url = release.get("html_url", f"https://github.com/{JARVIS_GITHUB_REPO}/releases/latest")
-            _bridge.append_html.emit(_html_burbuja_jarvis(
-                f'<b>Hay una actualización disponible: v{_escape_html(tag)}</b><br>'
-                f'<a href="{_escape_html(url)}" style="color:#73d9ff;">Descargar nueva versión</a><br>'
-                '<span style="color:#8899bb;font-size:11px;">Cierra Jarvis antes de instalarla.</span>'
-            ))
+            asset = next((item for item in release.get("assets", []) if str(item.get("name", "")).lower().endswith(".zip")), None)
+            if not asset:
+                return
+            global _actualizacion_pendiente
+            destino = os.path.join(data_path, "updates", tag)
+            os.makedirs(destino, exist_ok=True)
+            zip_path = os.path.join(destino, "Jarvis-update.zip")
+            if not os.path.exists(zip_path):
+                descarga = requests.get(asset.get("browser_download_url", ""), timeout=60, stream=True)
+                descarga.raise_for_status()
+                with open(zip_path, "wb") as archivo:
+                    for bloque in descarga.iter_content(chunk_size=1024 * 256):
+                        if bloque:
+                            archivo.write(bloque)
+            extraido = os.path.join(destino, "package")
+            if not os.path.isdir(extraido):
+                with zipfile.ZipFile(zip_path) as archivo_zip:
+                    archivo_zip.extractall(extraido)
+            candidatos = [os.path.join(extraido, "Jarvis"), extraido]
+            paquete = next((ruta for ruta in candidatos if os.path.exists(os.path.join(ruta, "Jarvis.exe"))), None)
+            if not paquete:
+                return
+            _actualizacion_pendiente = (tag, paquete)
+            _bridge.update_ready.emit(tag, paquete)
     except Exception as exc:
         print(f"[Update] No se pudo comprobar actualización: {exc}")
+
+
+def _iniciar_actualizacion(tag: str, paquete: str) -> bool:
+    """Lanza un reemplazo diferido porque Windows no permite reemplazar el exe activo."""
+    if not getattr(sys, "frozen", False):
+        return False
+    destino = os.path.dirname(sys.executable)
+    script = os.path.join(data_path, "updates", f"apply-{tag}.ps1")
+    origen_ps = paquete.replace("'", "''")
+    destino_ps = destino.replace("'", "''")
+    contenido = (
+        "$ErrorActionPreference='Stop'\n"
+        "Start-Sleep -Seconds 2\n"
+        f"Copy-Item -Path '{origen_ps}\\*' -Destination '{destino_ps}' -Recurse -Force\n"
+        f"Start-Process -FilePath '{destino_ps}\\Jarvis.exe'\n"
+        "Remove-Item -LiteralPath $PSCommandPath -Force\n"
+    )
+    with open(script, "w", encoding="utf-8") as archivo:
+        archivo.write(contenido)
+    subprocess.Popen(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script], creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
+    return True
 
 config = cargar_config()
 cargar_modos_extra()
@@ -2613,6 +2655,7 @@ class _UIBridge(QObject):
     open_commands_dialog = Signal()
     open_extensions_dialog = Signal()
     extension_auth_result = Signal(str, bool, str)
+    update_ready = Signal(str, str)
     show_screen_overlay = Signal()  # abre el visor desde el hilo Qt principal
     analyze_screen = Signal(str)  # analiza después de que el stream tenga un frame
 
@@ -5971,6 +6014,7 @@ class JarvisUI(QWidget):
         _bridge.open_config_dialog.connect(self._abrir_cfg)
         _bridge.open_commands_dialog.connect(self._abrir_comandos)
         _bridge.open_extensions_dialog.connect(self._abrir_extensiones)
+        _bridge.update_ready.connect(self._preguntar_actualizacion)
 
     # ── Slots del chat ────────────────────────────────────────────────────────
 
@@ -6086,6 +6130,17 @@ class JarvisUI(QWidget):
 
     def _abrir_extensiones(self):
         VentanaExtensiones(self).exec()
+
+    def _preguntar_actualizacion(self, tag: str, paquete: str):
+        respuesta = QMessageBox.question(
+            self,
+            "Actualización disponible",
+            f"Jarvis {tag} ya está preparada. ¿Reiniciar ahora para instalarla?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.Yes,
+        )
+        if respuesta == QMessageBox.StandardButton.Yes and _iniciar_actualizacion(tag, paquete):
+            _bridge.quit_app.emit()
 
     def _link_clickeado(self, url: QUrl):
         """Maneja clicks en links del chat: archivos, correos, URLs web, imgs."""
