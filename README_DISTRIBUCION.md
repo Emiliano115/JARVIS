@@ -50,3 +50,7 @@ No existe garantia de deteccion cero. Para reducir falsos positivos:
 ## Primer arranque
 
 Jarvis pedira permisos locales por capacidad. Google se autoriza por OAuth y el token queda en la carpeta de datos del usuario, nunca en GitHub ni dentro del paquete.
+
+## Actualizaciones
+
+Jarvis comprueba en segundo plano si existe un GitHub Release posterior y muestra un enlace. La actualización no reemplaza el `.exe` automáticamente: cierra Jarvis, descarga el ZIP nuevo desde Releases, extrae la carpeta completa y reemplaza la instalación anterior. La configuración y memoria se conservan en `%LOCALAPPDATA%\Jarvis`.

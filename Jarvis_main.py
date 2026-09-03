@@ -174,6 +174,8 @@ GROQ_BASE_URL  = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL     = "llama-3.3-70b-versatile"
 ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_MODEL    = "claude-sonnet-4-20250514"
+JARVIS_VERSION     = "1.0.2"
+JARVIS_GITHUB_REPO = "Emiliano115/JARVIS"
 
 # =============================================================================
 # 2. CONFIGURACIÓN Y PERFIL
@@ -223,6 +225,31 @@ def cargar_modos_extra():
                 modos.update(json.load(f))
         except Exception:
             pass
+
+
+def _comprobar_actualizacion():
+    """Avisa de un release nuevo; nunca reemplaza el ejecutable en silencio."""
+    try:
+        respuesta = requests.get(
+            f"https://api.github.com/repos/{JARVIS_GITHUB_REPO}/releases/latest",
+            timeout=4,
+            headers={"Accept": "application/vnd.github+json"},
+        )
+        if not respuesta.ok:
+            return
+        release = respuesta.json()
+        tag = str(release.get("tag_name", "")).lstrip("v")
+        def version(valor):
+            return tuple(int(parte) for parte in re.findall(r"\d+", valor)[:3]) or (0,)
+        if version(tag) > version(JARVIS_VERSION):
+            url = release.get("html_url", f"https://github.com/{JARVIS_GITHUB_REPO}/releases/latest")
+            _bridge.append_html.emit(_html_burbuja_jarvis(
+                f'<b>Hay una actualización disponible: v{_escape_html(tag)}</b><br>'
+                f'<a href="{_escape_html(url)}" style="color:#73d9ff;">Descargar nueva versión</a><br>'
+                '<span style="color:#8899bb;font-size:11px;">Cierra Jarvis antes de instalarla.</span>'
+            ))
+    except Exception as exc:
+        print(f"[Update] No se pudo comprobar actualización: {exc}")
 
 config = cargar_config()
 cargar_modos_extra()
@@ -2579,6 +2606,7 @@ class _UIBridge(QObject):
     open_config_dialog = Signal()  # abre VentanaConfig desde botón V5
     open_commands_dialog = Signal()
     open_extensions_dialog = Signal()
+    extension_auth_result = Signal(str, bool, str)
     show_screen_overlay = Signal()  # abre el visor desde el hilo Qt principal
     analyze_screen = Signal(str)  # analiza después de que el stream tenga un frame
 
@@ -5614,6 +5642,8 @@ class VentanaExtensiones(QDialog):
             ("Pantalla", "Observar o controlar el escritorio", "permiso_pantalla"),
         ]
         self._chks = []
+        self._estados = {}
+        _bridge.extension_auth_result.connect(self._resultado_autorizacion)
         grid = QGridLayout()
         grid.setHorizontalSpacing(10); grid.setVerticalSpacing(10)
         for indice, (nombre, detalle, clave) in enumerate(conexiones):
@@ -5647,6 +5677,7 @@ class VentanaExtensiones(QDialog):
             card_layout.addWidget(icon); card_layout.addLayout(info, 1); card_layout.addWidget(estado); card_layout.addWidget(interruptor)
             grid.addWidget(tarjeta, indice // 2, indice % 2)
             self._chks.append((estado, clave))
+            self._estados[clave] = estado
         layout.addLayout(grid)
         nota = QLabel("Las conexiones de Google requieren autorización OAuth la primera vez que se usan.")
         nota.setStyleSheet("color:#6f7882;font-size:11px;padding-top:6px;"); nota.setWordWrap(True); layout.addWidget(nota)
@@ -5659,8 +5690,41 @@ class VentanaExtensiones(QDialog):
     def _alternar_extension(self, boton, etiqueta):
         clave = boton.property("clave")
         config[clave] = boton.isChecked()
+        if config[clave] and clave in {
+            "google_calendar", "google_tasks", "google_gmail", "google_drive", "google_contacts"
+        }:
+            etiqueta.setText("Conectando...")
+            etiqueta.setStyleSheet("color:#e7b85c;font-size:11px;font-weight:600;")
+            threading.Thread(
+                target=self._autorizar_google,
+                args=(clave,),
+                daemon=True,
+                name=f"OAuth-{clave}",
+            ).start()
+            return
         conectado, texto_estado = _estado_extension(clave)
         etiqueta.setText(texto_estado)
+        etiqueta.setStyleSheet("color:#69d27a;font-size:11px;font-weight:600;" if conectado else "color:#8b929a;font-size:11px;font-weight:600;")
+
+    @staticmethod
+    def _autorizar_google(clave):
+        try:
+            credenciales = agent_google._obtener_credenciales()
+            conectado, texto = _estado_extension(clave)
+            _bridge.extension_auth_result.emit(clave, conectado, texto)
+        except Exception as exc:
+            print(f"[Extensiones] Error OAuth {clave}: {exc}")
+            config[clave] = False
+            _bridge.extension_auth_result.emit(clave, False, "Desconectada")
+
+    def _resultado_autorizacion(self, clave, conectado, texto):
+        etiqueta = self._estados.get(clave)
+        if etiqueta is None:
+            return
+        boton = next((item for item in self._chks if item[1] == clave), None)
+        if boton and not conectado:
+            config[clave] = False
+        etiqueta.setText(texto)
         etiqueta.setStyleSheet("color:#69d27a;font-size:11px;font-weight:600;" if conectado else "color:#8b929a;font-size:11px;font-weight:600;")
 
     def _guardar(self):
@@ -6182,6 +6246,7 @@ if __name__ == "__main__":
     # UI
     ui = JarvisUI()
     ui.showFullScreen()
+    threading.Thread(target=_comprobar_actualizacion, daemon=True, name="ComprobarActualizacion").start()
     _screen_overlay = PantallaOverlay(ui)
     _bridge.show_screen_overlay.connect(_screen_overlay.iniciar_stream)
     _bridge.analyze_screen.connect(
