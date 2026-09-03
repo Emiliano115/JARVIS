@@ -7,6 +7,7 @@ project = os.path.abspath(os.getcwd())
 datas = [
     (project + r"\V5.html", "."),
     (project + r"\hand_landmarker.task", "."),
+    (project + r"\jarvis_logo.svg", "."),
 ]
 binaries = []
 hiddenimports = [

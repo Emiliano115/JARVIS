@@ -174,7 +174,7 @@ GROQ_BASE_URL  = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL     = "llama-3.3-70b-versatile"
 ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_MODEL    = "claude-sonnet-4-20250514"
-JARVIS_VERSION     = "1.0.2"
+JARVIS_VERSION     = "1.0.3"
 JARVIS_GITHUB_REPO = "Emiliano115/JARVIS"
 
 # =============================================================================
@@ -206,6 +206,12 @@ def cargar_config() -> dict:
 def guardar_config(cfg: dict):
     with open(config_file, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2, ensure_ascii=False)
+
+
+def _cargar_icono_app() -> QIcon:
+    """Carga el logo tanto desde el paquete como desde el proyecto."""
+    ruta_logo = os.path.join(base_path, "jarvis_logo.svg")
+    return QIcon(ruta_logo) if os.path.exists(ruta_logo) else QIcon()
 
 
 def _dispositivo_microfono():
@@ -6162,6 +6168,7 @@ if __name__ == "__main__":
     ).strip()
 
     app = QApplication(sys.argv)
+    app.setWindowIcon(_cargar_icono_app())
 
     # Preguntar modo de carga de apps si no está configurado
     modo_actual  = config.get("modo_carga_apps", None)
