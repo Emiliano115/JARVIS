@@ -54,3 +54,21 @@ Jarvis pedira permisos locales por capacidad. Google se autoriza por OAuth y el 
 ## Actualizaciones
 
 Jarvis comprueba en segundo plano si existe un GitHub Release posterior. Si encuentra uno, descarga el ZIP en `%LOCALAPPDATA%\Jarvis\updates`, pide confirmacion y reinicia para reemplazar la carpeta del programa. No tienes que buscar ni descargar el ZIP manualmente. La configuracion, memoria y tokens se conservan en `%LOCALAPPDATA%\Jarvis`.
+
+Antes de extraer una actualizacion, Jarvis comprueba:
+
+- El digest SHA-256 publicado por GitHub cuando el release lo incluye.
+- Que el ZIP sea valido y contenga `Jarvis.exe`.
+- Que ningun archivo del ZIP intente salir de la carpeta de actualizaciones.
+
+## Prueba con usuarios
+
+Realiza cada prueba con consentimiento y sin datos reales:
+
+1. Usuario con movilidad reducida: activar gestos, usar clic y desplazamiento, y recuperar con "recalibra el modo gestos".
+2. Usuario con baja vision: cambiar el perfil de accesibilidad y usar "lee la pantalla" en una pagina con dos columnas.
+3. Usuario sin experiencia tecnica: dictar un correo de prueba y confirmar que Jarvis pide confirmacion antes de enviarlo.
+4. En cada prueba registrar tarea, errores, tiempo aproximado, ayuda necesaria y sugerencia del usuario.
+5. No guardar capturas, audio ni datos personales de las sesiones sin permiso explicito.
+
+La firma digital del ejecutable y del instalador requiere un certificado de firma de codigo emitido para el responsable de la distribucion. No debe sustituirse por un certificado de prueba.

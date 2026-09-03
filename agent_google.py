@@ -144,6 +144,9 @@ _svc_tasks    = None
 _svc_people   = None
 _svc_drive    = None
 
+_correo_pendiente = None
+_correo_lock = threading.Lock()
+
 
 def _obtener_credenciales():
     """Delega al monolito si está disponible; si no, ejecuta el flujo propio."""
@@ -425,7 +428,75 @@ def gmail_buscar(consulta: str, chat_widget=None):
 
 
 def gmail_enviar(destinatario: str, asunto: str, cuerpo: str, chat_widget=None):
-    """Envía un correo electrónico."""
+    """Prepara un correo y solicita confirmación antes de enviarlo."""
+    global _correo_pendiente
+    destinatario = str(destinatario or "").strip()
+    asunto = str(asunto or "(sin asunto)").strip()
+    cuerpo = str(cuerpo or "").strip()
+    if not destinatario:
+        _hablar("Necesito un destinatario para preparar el correo.", chat_widget)
+        return
+    if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", destinatario):
+        _hablar("No reconocí un correo completo. Repítelo con el nombre, arroba y dominio.", chat_widget)
+        return
+
+    with _correo_lock:
+        _correo_pendiente = {
+            "destinatario": destinatario,
+            "asunto": asunto,
+            "cuerpo": cuerpo,
+            "chat_widget": chat_widget,
+        }
+
+    vista_previa = re.sub(r"\s+", " ", cuerpo).strip()[:180]
+    resumen = f"Para {destinatario}. Asunto: {asunto}."
+    if vista_previa:
+        resumen += f" Texto: {vista_previa}."
+    _hablar(f"He preparado el correo. {resumen} ¿Confirmas que lo envíe?", chat_widget)
+    html = (
+        '<b>📧 Correo listo para enviar</b><br>'
+        f'<span style="color:#8899bb;">Para:</span> <span style="color:#4db8ff;">{destinatario}</span><br>'
+        f'<span style="color:#8899bb;">Asunto:</span> <span style="color:#cce0ff;">{asunto}</span><br>'
+        '<span style="color:#ffaa44;">Di "sí, envíalo" para confirmar o "cancela" para descartarlo.</span>'
+    )
+    _bridge_html(_burbuja(html))
+    _bridge_scroll()
+
+
+def hay_correo_pendiente() -> bool:
+    with _correo_lock:
+        return _correo_pendiente is not None
+
+
+def resolver_correo_pendiente(comando: str, chat_widget=None) -> bool:
+    """Resuelve la confirmación pendiente; devuelve True si consumió el comando."""
+    global _correo_pendiente
+    texto = _quitar_tildes(str(comando or "").lower()).strip(" .,!?:;")
+    confirmaciones = ("si", "si envialo", "confirmo", "confirmar", "envialo", "enviar")
+    cancelaciones = ("no", "cancela", "cancelar", "anula", "anular", "descarta")
+    es_confirmacion = any(texto == opcion or texto.startswith(opcion + " ") for opcion in confirmaciones)
+    es_cancelacion = any(texto == opcion or texto.startswith(opcion + " ") for opcion in cancelaciones)
+    if not es_confirmacion and not es_cancelacion:
+        return False
+
+    with _correo_lock:
+        pendiente = _correo_pendiente
+        _correo_pendiente = None
+    if not pendiente:
+        return True
+    if es_cancelacion:
+        _hablar("Correo cancelado. No se envió nada.", chat_widget or pendiente.get("chat_widget"))
+        return True
+
+    _enviar_correo_confirmado(
+        pendiente["destinatario"], pendiente["asunto"], pendiente["cuerpo"],
+        chat_widget or pendiente.get("chat_widget"),
+    )
+    return True
+
+
+def _enviar_correo_confirmado(destinatario: str, asunto: str, cuerpo: str, chat_widget=None):
+    """Realiza la llamada Gmail únicamente después de confirmar."""
     _hablar(f"Enviando correo a {destinatario}...", chat_widget)
     svc = _gmail()
     if not svc:

@@ -31,7 +31,7 @@ from __future__ import annotations
 # =============================================================================
 # 1. IMPORTS Y RUTAS
 # =============================================================================
-import sys, os, re, json, threading, time, unicodedata, random, shutil, sqlite3, wave, webbrowser, zipfile, tempfile, subprocess
+import sys, os, re, json, threading, time, unicodedata, random, shutil, sqlite3, wave, webbrowser, zipfile, tempfile, subprocess, hashlib
 from datetime import datetime, timedelta
 from urllib.parse import urlparse, parse_qs
 from http.server import HTTPServer, BaseHTTPRequestHandler
@@ -174,7 +174,7 @@ GROQ_BASE_URL  = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL     = "llama-3.3-70b-versatile"
 ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_MODEL    = "claude-sonnet-4-20250514"
-JARVIS_VERSION     = "1.0.4"
+JARVIS_VERSION     = "2.0.0"
 JARVIS_GITHUB_REPO = "Emiliano115/JARVIS"
 
 # =============================================================================
@@ -194,6 +194,14 @@ def cargar_config() -> dict:
         "google_calendar": True, "google_maps": True,
         "guardar_links_apps": True, "guardar_archivos_recientes": True,
         "modo_carga_apps": None, "usar_tts_gratis": True,
+        "perfil_accesibilidad": "estandar", "lectura_pantalla_max_caracteres": 900,
+        "comandos_personalizados": {
+            "leer_pantalla": ["lee la pantalla", "modo lectura", "leer el contenido"],
+            "activar_gestos": ["activa los gestos"],
+            "desactivar_gestos": ["desactiva los gestos"],
+            "calibrar_gestos": ["calibra los gestos", "calibrar la mano", "calibrar el pellizco"],
+            "recalibrar_gestos": ["recalibra el modo gestos", "reinicia los gestos"],
+        },
     }
     if os.path.exists(config_file):
         try:
@@ -206,6 +214,34 @@ def cargar_config() -> dict:
 def guardar_config(cfg: dict):
     with open(config_file, "w", encoding="utf-8") as f:
         json.dump(cfg, f, indent=2, ensure_ascii=False)
+
+
+PERFILES_ACCESIBILIDAD = {
+    "estandar": {"nombre": "Estándar", "max_caracteres": 900, "max_lineas": 10},
+    "breve": {"nombre": "Lectura breve", "max_caracteres": 500, "max_lineas": 4},
+    "detallada": {"nombre": "Lectura detallada", "max_caracteres": 1500, "max_lineas": 20},
+}
+
+
+def aplicar_perfil_accesibilidad(nombre: str):
+    """Aplica y persiste un perfil de lectura de pantalla."""
+    perfil = PERFILES_ACCESIBILIDAD.get(nombre, PERFILES_ACCESIBILIDAD["estandar"])
+    config["perfil_accesibilidad"] = nombre if nombre in PERFILES_ACCESIBILIDAD else "estandar"
+    config["lectura_pantalla_max_caracteres"] = perfil["max_caracteres"]
+    config["lectura_pantalla_max_lineas"] = perfil["max_lineas"]
+    guardar_config(config)
+
+
+def _comando_personalizado(texto: str) -> dict | None:
+    """Devuelve una acción segura asociada a una frase personalizada."""
+    personalizados = config.get("comandos_personalizados", {})
+    acciones_seguras = {"leer_pantalla", "activar_gestos", "desactivar_gestos", "calibrar_gestos", "recalibrar_gestos"}
+    for accion, frases in personalizados.items():
+        if accion not in acciones_seguras or not isinstance(frases, list):
+            continue
+        if any(texto == str(frase).strip().lower() for frase in frases if str(frase).strip()):
+            return {"accion": accion, "params": {}}
+    return None
 
 
 def _cargar_icono_app() -> QIcon:
@@ -236,6 +272,35 @@ def cargar_modos_extra():
 _actualizacion_pendiente = None
 
 
+def _verificar_paquete_actualizacion(zip_path: str, digest: str = "") -> bool:
+    """Verifica hash GitHub si existe y rechaza ZIPs inválidos o inseguros."""
+    try:
+        esperado = str(digest or "").lower().removeprefix("sha256:").strip()
+        sha256 = hashlib.sha256()
+        with open(zip_path, "rb") as archivo:
+            for bloque in iter(lambda: archivo.read(1024 * 1024), b""):
+                sha256.update(bloque)
+        calculado = sha256.hexdigest().lower()
+        if esperado and calculado != esperado:
+            print(f"[Update] Hash SHA-256 no coincide: esperado={esperado}, calculado={calculado}")
+            return False
+        with zipfile.ZipFile(zip_path) as archivo_zip:
+            nombres = archivo_zip.namelist()
+            if not any(nombre.replace("\\", "/").rstrip("/").endswith("Jarvis.exe") for nombre in nombres):
+                print("[Update] Paquete rechazado: no contiene Jarvis.exe")
+                return False
+            base = os.path.abspath(os.path.dirname(zip_path))
+            for nombre in nombres:
+                destino = os.path.abspath(os.path.join(base, nombre))
+                if not destino.startswith(base + os.sep):
+                    print(f"[Update] Paquete rechazado por ruta insegura: {nombre}")
+                    return False
+        return True
+    except (OSError, zipfile.BadZipFile) as exc:
+        print(f"[Update] Paquete inválido: {exc}")
+        return False
+
+
 def _comprobar_actualizacion():
     """Busca y prepara en segundo plano el siguiente release de GitHub."""
     try:
@@ -258,6 +323,9 @@ def _comprobar_actualizacion():
             destino = os.path.join(data_path, "updates", tag)
             os.makedirs(destino, exist_ok=True)
             zip_path = os.path.join(destino, "Jarvis-update.zip")
+            digest = asset.get("digest", "")
+            if os.path.exists(zip_path) and not _verificar_paquete_actualizacion(zip_path, digest):
+                os.remove(zip_path)
             if not os.path.exists(zip_path):
                 descarga = requests.get(asset.get("browser_download_url", ""), timeout=60, stream=True)
                 descarga.raise_for_status()
@@ -265,6 +333,9 @@ def _comprobar_actualizacion():
                     for bloque in descarga.iter_content(chunk_size=1024 * 256):
                         if bloque:
                             archivo.write(bloque)
+            if not _verificar_paquete_actualizacion(zip_path, digest):
+                os.remove(zip_path)
+                return
             extraido = os.path.join(destino, "package")
             if not os.path.isdir(extraido):
                 with zipfile.ZipFile(zip_path) as archivo_zip:
@@ -2394,6 +2465,7 @@ _HERRAMIENTAS = """
 # AGENTE PANTALLA (observación y control explícito)
 - ver_pantalla                                         → abrir el visor de pantalla en tiempo real
 - analizar_pantalla                                    → describir visualmente la pantalla actual
+- leer_pantalla                                       → leer texto visible localmente mediante OCR
 - hacer_click         {x?, y?, boton?, clicks?}          → hacer clic en las coordenadas dadas o en el cursor actual
 - hacer_zoom          {cantidad?}                       → zoom in/out en la ventana activa
 - escribir            {texto, intervalo?}              → escribir en la ventana activa
@@ -2464,6 +2536,8 @@ _PROMPT_SISTEMA_TEMPLATE = (
     "   ▪ Fotos/imágenes de temas → buscar_imagen (SIEMPRE usa esto para imágenes)\n"
     "   ▪ Notas/alarmas/recordatorios → agente notas.\n"
     "   ▪ Correo/calendar/tareas → agente google.\n"
+    "   ▪ gmail_enviar SIEMPRE requiere confirmación posterior: prepara el correo, muestra destinatario/asunto y espera 'sí/envíalo'.\n"
+    "   ▪ Nunca trates 'gmail_enviar' como confirmado solo porque el usuario lo pidió inicialmente.\n"
     "9. MAPAS INTELIGENTES: cuando usuario pide 'mostrar', 'mapa', 'dónde está'\n"
     "   → usa mostrar_mapa con el NOMBRE MÁS COMPLETO posible:\n"
     "   Ej: 'Andrés Carne de Res en Chía', 'Torre Eiffel en París', 'Calle 93 Bogotá'\n"
@@ -2959,6 +3033,26 @@ def _analizar_pantalla_con_vision(chat_widget=None, pregunta=""):
             _bridge.scroll_down.emit()
     threading.Thread(target=_trabajo, daemon=True, name="ScreenVision").start()
 
+
+def _leer_pantalla_local(chat_widget=None):
+    """Lee texto visible con OCR local sin consumir tokens."""
+    imagen = agent_screen.obtener_ultimo_frame() or agent_screen.capturar_frame()
+    if imagen is None:
+        hablar("No pude capturar la pantalla.", chat_widget)
+        return
+    if not getattr(agent_screen, "HAS_OCR", False):
+        hablar("Para leer la pantalla localmente falta instalar pytesseract.", chat_widget)
+        return
+    texto = agent_screen.leer_texto_pantalla(imagen)
+    if not texto:
+        hablar("No encontré texto legible en la pantalla.", chat_widget)
+        return
+    html = "<p>" + _escape_html(texto).replace("\n", "<br>") + "</p>"
+    _bridge.append_html.emit(_html_burbuja_jarvis("<b>Texto de la pantalla</b><br>" + html))
+    _bridge.scroll_down.emit()
+    _agregar_historial("jarvis", "Texto leído de la pantalla: " + texto[:300])
+    _cola_voz.put("Esto es lo que puedo leer en pantalla: " + texto)
+
 # =============================================================================
 # MAPA DE SITIOS WEB CONOCIDOS
 # =============================================================================
@@ -3226,20 +3320,22 @@ def _ejecutar_accion(accion: dict, chat_widget=None):
 
     # ── Agente Pantalla ────────────────────────────────────────────────────────
     _ACCIONES_PANTALLA = {
-        "ver_pantalla", "analizar_pantalla", "activar_gestos", "desactivar_gestos",
+        "ver_pantalla", "analizar_pantalla", "leer_pantalla", "activar_gestos", "desactivar_gestos", "calibrar_gestos", "recalibrar_gestos",
         "hacer_click", "escribir", "pulsar_tecla", "desplazarse", "hacer_zoom",
     }
     if nombre in _ACCIONES_PANTALLA:
         try:
-            if nombre in {"ver_pantalla", "analizar_pantalla"} and not _permiso_concedido("pantalla"):
+            if nombre in {"ver_pantalla", "analizar_pantalla", "leer_pantalla"} and not _permiso_concedido("pantalla"):
                 hablar("El acceso a la pantalla está desactivado en Configuración.", chat_widget)
                 return
-            if nombre in {"activar_gestos", "desactivar_gestos", "hacer_click", "escribir", "pulsar_tecla", "desplazarse", "hacer_zoom"} and not _permiso_concedido("teclado"):
+            if nombre in {"activar_gestos", "desactivar_gestos", "calibrar_gestos", "recalibrar_gestos", "hacer_click", "escribir", "pulsar_tecla", "desplazarse", "hacer_zoom"} and not _permiso_concedido("teclado"):
                 hablar("El control de teclado y ratón está desactivado en Configuración.", chat_widget)
                 return
             if nombre == "analizar_pantalla":
                 _bridge.show_screen_overlay.emit()
                 _bridge.analyze_screen.emit(str(p.get("pregunta") or ""))
+            elif nombre == "leer_pantalla":
+                _leer_pantalla_local(chat_widget)
             else:
                 agent_screen.ejecutar(nombre, p, chat_widget)
             if nombre == "ver_pantalla":
@@ -3778,9 +3874,9 @@ def _llamar_gemini_cerebro(mensaje: str) -> list:
 
 _COMANDOS_DIRECTOS = [
     # ── Gestos y cámara ───────────────────────────────────────────────────────
-    (r'(?:activar|activa|enciende|encender)\s+(?:el\s+)?(?:modo\s+)?(?:de\s+)?(?:gestos|control\s+por\s+gestos|camara|cámara)',
+    (r'(?:activar|activa|enciende|encender)\s+(?:el\s+)?(?:modo\s+)?(?:de\s+)?(?:gesto(?:s)?|control\s+por\s+gestos|camara|cámara)',
                                                       "activar_gestos", {}),
-    (r'(?:desactivar|desactiva|apaga|apagar|cierra|cerrar)\s+(?:el\s+)?(?:modo\s+)?(?:de\s+)?(?:gestos|control\s+por\s+gestos|camara|cámara)',
+    (r'(?:desactivar|desactiva|apaga|apagar|cierra|cerrar)\s+(?:el\s+)?(?:modo\s+)?(?:de\s+)?(?:gesto(?:s)?|control\s+por\s+gestos|camara|cámara)',
                                                       "desactivar_gestos", {}),
     # ── Volumen ────────────────────────────────────────────────────────────────
     (r'sube\s+(el\s+)?volumen|m[aá]s\s+volumen|volumen\s+(m[aá]s|arriba|sube)',
@@ -3822,6 +3918,9 @@ _COMANDOS_DIRECTOS = [
 
 def _intentar_comando_directo(texto: str) -> dict | None:
     txt = texto.lower().strip()
+    personalizado = _comando_personalizado(txt)
+    if personalizado:
+        return personalizado
 
     def _extraer_coordenadas(texto: str) -> tuple[int, int] | None:
         patrones = [
@@ -3912,12 +4011,16 @@ def _intentar_comando_directo(texto: str) -> dict | None:
         return {"accion": "ver_pantalla", "params": {}}
     if re.search(r'\b(qu[eé]|dime|describe|explica)\b.*\b(ves|v[eé]s|pantalla|escritorio)\b', txt):
         return {"accion": "analizar_pantalla", "params": {}}
+    if re.search(r'\b(?:lee|leer|lectura)\b.*\b(?:pantalla|texto|p[aá]gina|escritorio)\b', txt):
+        return {"accion": "leer_pantalla", "params": {}}
     if re.search(r'\b(resume|resumir|resumen|explica|explicar|para qu[eé] sirve|qu[eé] es)\b', txt) and re.search(r'\b(pantalla|p[aá]gina|art[ií]culo|texto|esto|aqu[ií])\b', txt):
         return {"accion": "analizar_pantalla", "params": {"pregunta": texto}}
     if re.search(r'\b(?:activar|activa|enciende|encender)\b.*\b(?:modo\s+)?(?:de\s+)?(?:gestos|control\s+por\s+gestos|camara|cámara)\b', txt):
         return {"accion": "activar_gestos", "params": {}}
     if re.search(r'\b(?:desactivar|desactiva|apaga|apagar|cerrar|cierra)\b.*\b(?:modo\s+)?(?:de\s+)?(?:gestos|control\s+por\s+gestos|camara|cámara)\b', txt):
         return {"accion": "desactivar_gestos", "params": {}}
+    if re.search(r'\b(?:recalibra|recalibrar|reinicia|reiniciar)\b.*\b(?:modo\s+)?(?:de\s+)?(?:gesto(?:s)?|control\s+por\s+gestos|camara|cámara)\b', txt):
+        return {"accion": "recalibrar_gestos", "params": {}}
 
     if re.search(r'\b(?:click|clic|pulsa(?:r)?|presiona(?:r)?|toca(?:r)?|haz|da|dale|realiza|ejecuta)\b', txt) and re.search(r'\b(?:click|clic|pulsa(?:r)?|presiona(?:r)?|toca(?:r)?)\b', txt):
         boton = "left"
@@ -4107,6 +4210,37 @@ def _intentar_comando_directo(texto: str) -> dict | None:
 _STOP_PHRASES = {"silencio", "para", "calla", "stop", "basta", "sh", "shh", "shhh"}
 _modo_conversacion = threading.Event()
 
+
+def _extraer_correo_del_comando(comando: str) -> str:
+    """Extrae un email escrito o dictado en palabras."""
+    texto = quitar_tildes(str(comando or "").lower())
+    directo = re.search(r"[\w.+-]+@[\w.-]+\.[a-z]{2,}", texto)
+    if directo:
+        return directo.group(0)
+
+    hablado = texto
+    hablado = re.sub(r"\s*(?:arroba|at)\s*", "@", hablado)
+    hablado = re.sub(r"\s+(?:punto|dot)\s+", ".", hablado)
+    hablado = re.sub(r"\s+(?:guion bajo|underscore)\s+", "_", hablado)
+    hablado = re.sub(r"\s+(?:guion|guion medio|dash)\s+", "-", hablado)
+    hablado = re.sub(r"\s+", " ", hablado)
+    candidato = re.search(r"[\w.+-]+@[\w.-]+\.[a-z]{2,}", hablado)
+    return candidato.group(0) if candidato else ""
+
+
+def _corregir_destinatario_correo(accion: dict, comando: str) -> dict:
+    """Impide que el modelo sustituya el destinatario escrito o dictado."""
+    if accion.get("accion") != "gmail_enviar":
+        return accion
+    correo_original = _extraer_correo_del_comando(comando)
+    params = dict(accion.get("params", {}) or {})
+    if correo_original:
+        params["destinatario"] = correo_original
+    elif not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", str(params.get("destinatario", ""))):
+        params["destinatario"] = ""
+    accion["params"] = params
+    return accion
+
 def _activar_modo_conversacion():
     _modo_conversacion.set()
     # Auto-desactivar en 5 minutos de inactividad
@@ -4176,6 +4310,9 @@ def interpretar_multiple(comando: str, chat_widget=None, mostrar_usuario: bool =
     import agent_pc as _apc
     if _apc.hay_destino_pendiente():
         if _apc.resolver_destino_pendiente(comando, chat_widget):
+            return
+    if agent_google.hay_correo_pendiente():
+        if agent_google.resolver_correo_pendiente(comando, chat_widget):
             return
     # Comando de control directo de mic manual desde V5
     if cmd_lower == "iniciar_escucha_microfono":
@@ -4290,6 +4427,7 @@ def interpretar_multiple(comando: str, chat_widget=None, mostrar_usuario: bool =
 
     if acciones:
         for accion in acciones:
+            accion = _corregir_destinatario_correo(accion, comando)
             _ejecutar_accion(accion, chat_widget)
         return
 
@@ -5392,6 +5530,41 @@ class VentanaConfig(QDialog):
         titulo.setObjectName("titulo")
         layout.addWidget(titulo)
 
+        perfil_layout = QHBoxLayout()
+        perfil_layout.addWidget(QLabel("Perfil de accesibilidad"))
+        self._perfil_accesibilidad = QComboBox()
+        for clave, perfil in PERFILES_ACCESIBILIDAD.items():
+            self._perfil_accesibilidad.addItem(perfil["nombre"], clave)
+        seleccionado = self._perfil_accesibilidad.findData(config.get("perfil_accesibilidad", "estandar"))
+        self._perfil_accesibilidad.setCurrentIndex(max(0, seleccionado))
+        perfil_layout.addWidget(self._perfil_accesibilidad)
+        layout.addLayout(perfil_layout)
+
+        alias_titulo = QLabel("Frases personalizadas (separadas por comas)")
+        alias_titulo.setStyleSheet("color:#8899bb;font-size:11px;margin-top:6px;")
+        layout.addWidget(alias_titulo)
+        ayuda_alias = QLabel(
+            "Calibrar gestos ajusta la distancia del pellizco para reconocer mejor el clic, el clic derecho y el arrastre."
+        )
+        ayuda_alias.setStyleSheet("color:#6f7882;font-size:11px;")
+        ayuda_alias.setWordWrap(True)
+        layout.addWidget(ayuda_alias)
+        self._alias_fields = {}
+        for clave, etiqueta in (
+            ("leer_pantalla", "Leer pantalla"),
+            ("activar_gestos", "Activar gestos"),
+            ("desactivar_gestos", "Desactivar gestos"),
+            ("calibrar_gestos", "Ajustar pellizco"),
+            ("recalibrar_gestos", "Reiniciar y recalibrar gestos"),
+        ):
+            fila_alias = QHBoxLayout()
+            fila_alias.addWidget(QLabel(etiqueta))
+            campo_alias = QLineEdit(", ".join(config.get("comandos_personalizados", {}).get(clave, [])))
+            campo_alias.setPlaceholderText("Ejemplo: modo lectura")
+            fila_alias.addWidget(campo_alias)
+            layout.addLayout(fila_alias)
+            self._alias_fields[clave] = campo_alias
+
         def _seccion(nombre):
             lbl = QLabel(nombre)
             lbl.setStyleSheet("color:#4db8ff;font-size:13px;font-weight:bold;margin-top:10px;")
@@ -5520,6 +5693,11 @@ class VentanaConfig(QDialog):
         for cb, key in self._chks:
             config[key] = cb.isChecked()
         config["microfono_dispositivo"] = self._microfono_combo.currentData()
+        aplicar_perfil_accesibilidad(self._perfil_accesibilidad.currentData())
+        config["comandos_personalizados"] = {
+            clave: [frase.strip().lower() for frase in campo.text().split(",") if frase.strip()]
+            for clave, campo in self._alias_fields.items()
+        }
         guardar_config(config)
         self.accept()
 

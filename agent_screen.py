@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import os
+import re
 import threading
 import time
 
@@ -20,6 +21,17 @@ try:
 except ImportError:
     pyautogui = None
     HAS_INPUT_CONTROL = False
+
+try:
+    import pytesseract
+    if os.path.exists(r"C:\Program Files\Tesseract-OCR\tesseract.exe"):
+        pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
+    elif os.path.exists(r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"):
+        pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"
+    HAS_OCR = True
+except ImportError:
+    pytesseract = None
+    HAS_OCR = False
 
 try:
     import cv2
@@ -165,6 +177,126 @@ def publicar_frame(imagen):
 def obtener_ultimo_frame():
     with _frame_lock:
         return _latest_frame.copy() if _latest_frame is not None else None
+
+
+def leer_texto_pantalla(imagen=None, max_caracteres=None, max_lineas=None) -> str:
+    """Extrae texto visible localmente conservando bloques, columnas y párrafos."""
+    if not HAS_OCR:
+        return ""
+    imagen = imagen or capturar_pantalla()
+    if imagen is None:
+        return ""
+    try:
+        from pytesseract import Output
+        datos = pytesseract.image_to_data(
+            imagen, output_type=Output.DICT, lang="spa+eng", config="--psm 3"
+        )
+    except Exception as exc:
+        print(f"[Screen OCR] No se pudo leer la pantalla: {exc}")
+        return ""
+
+    bloques = {}
+    total = len(datos.get("text", []))
+    for indice in range(total):
+        palabra = " ".join(str(datos["text"][indice]).split())
+        try:
+            confianza = float(datos.get("conf", [0] * total)[indice])
+        except (TypeError, ValueError):
+            confianza = 0
+        if not palabra or confianza < 25:
+            continue
+        clave_bloque = int(datos.get("block_num", [0] * total)[indice])
+        clave_parrafo = int(datos.get("par_num", [0] * total)[indice])
+        clave_linea = int(datos.get("line_num", [0] * total)[indice])
+        clave = (clave_bloque, clave_parrafo, clave_linea)
+        linea = bloques.setdefault(clave, {
+            "palabras": [],
+            "x": int(datos.get("left", [0] * total)[indice]),
+            "y": int(datos.get("top", [0] * total)[indice]),
+            "h": int(datos.get("height", [0] * total)[indice]),
+        })
+        linea["palabras"].append(palabra)
+
+    lineas = []
+    vistos = set()
+    bloques_visual = {}
+    for (numero_bloque, numero_parrafo, _), linea in bloques.items():
+        bloque = bloques_visual.setdefault(numero_bloque, {"lineas": [], "x": linea["x"], "y": linea["y"]})
+        bloque["lineas"].append((numero_parrafo, linea))
+
+    lineas_ocr = []
+    for bloque in bloques_visual.values():
+        for numero_parrafo, linea in bloque["lineas"]:
+            lineas_ocr.append((bloque, numero_parrafo, linea))
+
+    # Cuando Tesseract une dos columnas en un bloque, el mayor salto horizontal
+    # entre líneas permite reconstruirlas sin intercalar sus párrafos.
+    lineas_ocr = []
+    vistos = set()
+    for (numero_bloque, numero_parrafo, _), linea in bloques.items():
+        limpio = " ".join(linea["palabras"])
+        if re.fullmatch(r"(?:https?://|www\.)\S+", limpio, re.IGNORECASE):
+            continue
+        limpio = re.sub(r"https?://\S+|www\.\S+", "[enlace]", limpio, flags=re.IGNORECASE)
+        if len(re.sub(r"[^\wáéíóúüñ]", "", limpio, flags=re.IGNORECASE)) < 3:
+            continue
+        clave = limpio.casefold()
+        if clave in vistos:
+            continue
+        vistos.add(clave)
+        lineas_ocr.append({
+            "texto": limpio,
+            "x": linea["x"],
+            "y": linea["y"],
+            "h": max(1, linea["h"]),
+            "bloque": numero_bloque,
+            "parrafo": numero_parrafo,
+        })
+
+    if not lineas_ocr:
+        return ""
+
+    # Divide por el mayor hueco horizontal: en presentaciones suele ser el
+    # espacio entre columnas, mientras que las líneas de una columna quedan juntas.
+    columnas = [lineas_ocr]
+    if imagen.width and len(lineas_ocr) >= 2:
+        ordenadas_x = sorted(lineas_ocr, key=lambda item: item["x"])
+        saltos = [
+            (ordenadas_x[indice + 1]["x"] - ordenadas_x[indice]["x"], indice)
+            for indice in range(len(ordenadas_x) - 1)
+        ]
+        salto, indice_salto = max(saltos)
+        if salto > imagen.width * 0.15 and indice_salto >= 1 and len(ordenadas_x) - indice_salto >= 1:
+            columnas = [ordenadas_x[:indice_salto + 1], ordenadas_x[indice_salto + 1:]]
+
+    bloques_texto = []
+    for columna in sorted(columnas, key=lambda grupo: min(item["x"] for item in grupo)):
+        ordenadas = sorted(columna, key=lambda item: (item["y"], item["x"]))
+        altura_media = sorted(item["h"] for item in ordenadas)[len(ordenadas) // 2]
+        separacion = max(8, altura_media * 1.35)
+        actual = []
+        anterior = None
+        for item in ordenadas:
+            distancia = item["y"] - (anterior["y"] + anterior["h"]) if anterior else 0
+            nuevo_bloque = anterior and (
+                distancia > separacion
+                or item["bloque"] != anterior["bloque"]
+                or (item["parrafo"] != anterior["parrafo"] and distancia > altura_media * 0.8)
+            )
+            if nuevo_bloque and actual:
+                bloques_texto.append(" ".join(actual))
+                actual = []
+            actual.append(item["texto"])
+            anterior = item
+        if actual:
+            bloques_texto.append(" ".join(actual))
+
+    resultado = "\n\n".join(bloques_texto)
+    if max_lineas is not None:
+        resultado = "\n".join(resultado.splitlines()[:max_lineas])
+    if max_caracteres is not None:
+        resultado = resultado[:max_caracteres]
+    return resultado
 
 
 def _require_control(chat_widget=None) -> bool:
@@ -815,7 +947,33 @@ def calibrar_gestos(duracion: int = 6, chat_widget=None):
         if cap is None:
             _say("No pude abrir la cámara para calibrar.", chat_widget)
             return None
+        calibration_detector = None
+        calibration_image = None
+        calibration_vision = None
+        if not (hasattr(mp, 'solutions') and hasattr(mp.solutions, 'hands')):
+            try:
+                import glob
+                from mediapipe.tasks.python import vision as calibration_vision
+                from mediapipe.tasks.python.core.base_options import BaseOptions
+                candidates = []
+                for carpeta in (os.path.dirname(os.path.abspath(__file__)), os.getcwd(), _ctx.get("resource_path", "")):
+                    if carpeta and os.path.isdir(carpeta):
+                        candidates.extend(glob.glob(os.path.join(carpeta, "**", "hand_landmarker*.task"), recursive=True))
+                if candidates:
+                    from mediapipe.tasks.python.vision.core import image as calibration_image
+                    calibration_detector = calibration_vision.HandLandmarker.create_from_options(
+                        calibration_vision.HandLandmarkerOptions(
+                            base_options=BaseOptions(model_asset_path=os.path.abspath(candidates[0])),
+                            running_mode=calibration_vision.RunningMode.VIDEO,
+                            num_hands=1,
+                            min_hand_detection_confidence=0.5,
+                        )
+                    )
+            except Exception as exc:
+                print(f"[Screen] No pude preparar calibración Tasks: {exc}")
+
         inicio = time.time()
+        timestamp = 0
         dists = []
         while time.time() - inicio < max(2, int(duracion)):
             ok, frame = cap.read()
@@ -836,21 +994,28 @@ def calibrar_gestos(duracion: int = 6, chat_widget=None):
                             d = math.hypot((lm.x - lm2.x) * frame.shape[1], (lm.y - lm2.y) * frame.shape[0])
                             dists.append(d)
                 else:
-                    # Tasks API attempt (fast path)
-                    try:
-                        from mediapipe.tasks.python.vision.core import image as image_lib
-                        img = image_lib.Image(image_lib.ImageFormat.SRGB, rgb)
-                        # attempt to use existing hand_landmarker model file
-                        # reuse existing model detection if available in this module
-                        # fallback: just skip
-                        pass
-                    except Exception:
-                        pass
+                    if calibration_detector is not None and calibration_image is not None:
+                        img = calibration_image.Image(calibration_image.ImageFormat.SRGB, rgb)
+                        timestamp += 33
+                        resultado = calibration_detector.detect_for_video(img, timestamp)
+                        manos = getattr(resultado, "hand_landmarks", None) or []
+                        if manos:
+                            lm = manos[0][4]
+                            lm2 = manos[0][8]
+                            dists.append(math.hypot(
+                                (lm.x - lm2.x) * frame.shape[1],
+                                (lm.y - lm2.y) * frame.shape[0],
+                            ))
             except Exception:
                 pass
             time.sleep(0.02)
         try:
             cap.release()
+        except Exception:
+            pass
+        try:
+            if calibration_detector is not None:
+                calibration_detector.close()
         except Exception:
             pass
         if not dists:
@@ -881,6 +1046,19 @@ def activar_modo_gestos(chat_widget=None):
     _toggle_clap_listener()
     _say("Modo de gestos activado con cámara y control por mano.", chat_widget)
     return True
+
+
+def recalibrar_modo_gestos(chat_widget=None):
+    """Reinicia el seguimiento, recalibra el pellizco y reactiva los gestos."""
+    estaba_activo = _modo_gestos_activo
+    if estaba_activo:
+        desactivar_modo_gestos(chat_widget)
+    _say("Voy a reajustar el modo gestos. Mantén la mano visible y pellizca varias veces.", chat_widget)
+    umbral = calibrar_gestos(6, chat_widget)
+    if umbral is None:
+        _say("No pude recalibrar los gestos. El modo gestos permanece apagado.", chat_widget)
+        return False
+    return activar_modo_gestos(chat_widget)
 
 
 def desactivar_modo_gestos(chat_widget=None):
@@ -934,6 +1112,8 @@ def ejecutar(accion: str, params: dict, chat_widget=None):
         return desactivar_modo_gestos(chat_widget)
     if accion == "calibrar_gestos":
         return calibrar_gestos(int(params.get('duracion', 6)), chat_widget)
+    if accion == "recalibrar_gestos":
+        return recalibrar_modo_gestos(chat_widget)
     if accion == "hacer_click":
         return hacer_click(
             params.get("x"), params.get("y"), params.get("boton", "left"),
