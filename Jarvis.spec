@@ -2,7 +2,7 @@ from PyInstaller.utils.hooks import collect_all
 
 import os
 
-project = os.path.abspath(os.path.dirname(__file__))
+project = os.path.abspath(os.getcwd())
 
 datas = [
     (project + r"\V5.html", "."),
