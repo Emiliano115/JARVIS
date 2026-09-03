@@ -174,7 +174,7 @@ GROQ_BASE_URL  = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL     = "llama-3.3-70b-versatile"
 ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_MODEL    = "claude-sonnet-4-20250514"
-JARVIS_VERSION     = "2.0.0"
+JARVIS_VERSION     = "2.0.2"
 JARVIS_GITHUB_REPO = "Emiliano115/JARVIS"
 
 # =============================================================================
@@ -358,11 +358,13 @@ def _iniciar_actualizacion(tag: str, paquete: str) -> bool:
     script = os.path.join(data_path, "updates", f"apply-{tag}.ps1")
     origen_ps = paquete.replace("'", "''")
     destino_ps = destino.replace("'", "''")
+    carpeta_update_ps = os.path.dirname(os.path.dirname(origen_ps)).replace("'", "''")
     contenido = (
         "$ErrorActionPreference='Stop'\n"
         "Start-Sleep -Seconds 2\n"
         f"Copy-Item -Path '{origen_ps}\\*' -Destination '{destino_ps}' -Recurse -Force\n"
         f"Start-Process -FilePath '{destino_ps}\\Jarvis.exe'\n"
+        f"Remove-Item -LiteralPath '{carpeta_update_ps}' -Recurse -Force -ErrorAction SilentlyContinue\n"
         "Remove-Item -LiteralPath $PSCommandPath -Force\n"
     )
     with open(script, "w", encoding="utf-8") as archivo:
