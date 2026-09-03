@@ -8,6 +8,8 @@ El `gitignore` ya excluye los datos sensibles. Como el token de Google fue expue
 
 ## Construir
 
+El build fija versiones compatibles de NumPy y OpenCV para evitar errores de extensiones C al iniciar el ejecutable empaquetado.
+
 En PowerShell, desde la carpeta del proyecto:
 
 ```powershell

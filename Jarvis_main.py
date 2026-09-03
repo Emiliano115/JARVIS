@@ -174,7 +174,7 @@ GROQ_BASE_URL  = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL     = "llama-3.3-70b-versatile"
 ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_MODEL    = "claude-sonnet-4-20250514"
-JARVIS_VERSION     = "2.0.2"
+JARVIS_VERSION     = "2.0.3"
 JARVIS_GITHUB_REPO = "Emiliano115/JARVIS"
 
 # =============================================================================
