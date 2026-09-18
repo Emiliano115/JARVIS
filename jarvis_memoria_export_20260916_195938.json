@@ -1,0 +1,37 @@
+{
+  "exportado": "2026-09-16T19:59:38",
+  "perfil": {
+    "nombre": null,
+    "ciudad": null,
+    "barrio": null,
+    "zona_horaria": "UTC-5",
+    "idioma": "español colombiano",
+    "idioma_codigo": "es",
+    "trabajo": null,
+    "colegio": null,
+    "edad": null,
+    "mascotas": null,
+    "hobbies": [],
+    "familia": {},
+    "preferencias": {},
+    "resumen_contexto": "Temas recientes: tecnologia. Última pregunta: Guarda en tu memoria que mi color favorito es el negro. Última respuesta: Con mucho gusto, señor. La Inteligencia Artificial es una rama de la ciencia de la computación dedicada al desarrollo de.",
+    "ultimo_tema": "tecnologia",
+    "extras": {}
+  },
+  "memoria_sesion": [
+    {
+      "clave": "color_favorito",
+      "valor": "negro",
+      "categoria": "general",
+      "origen": "usuario",
+      "actualizado": "2026-09-16T19:58:30"
+    },
+    {
+      "clave": "sugerencias",
+      "valor": "agregar API de generacion de imagenes, mejorar recordatorio de conversaciones, acceso a mas fuentes de informacion, simplificar sintaxis",
+      "categoria": "general",
+      "origen": "usuario",
+      "actualizado": "2026-05-18T13:30:03"
+    }
+  ]
+}

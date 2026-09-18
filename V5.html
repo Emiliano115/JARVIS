@@ -36,6 +36,10 @@
     filter: none !important;
   }
   button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible { outline: none !important; box-shadow: none !important; }
+  button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible {
+    outline: 2px solid #4db8ff !important;
+    outline-offset: 3px;
+  }
   .bottom-btn, .chat-send, .mic-btn, #mapa-close, .chat-input { outline: none !important; }
   #hud-tl, #hud-tr, #hud-bl, #hud-br { display: none !important; opacity: 0 !important; visibility: hidden !important; }
 
@@ -95,6 +99,8 @@ body::after {
   text-shadow: 0 0 5px rgba(0,212,255,0.3);
 }
 .status-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--primary); box-shadow: 0 0 6px var(--primary); animation: none; }
+  .status-bar.processing .status-dot { background: #ffaa44; box-shadow: 0 0 9px #ffaa44; animation: pulse-dot 0.8s infinite; }
+  .status-bar.processing #statusText { color: #ffaa44; }
 @keyframes pulse-dot { 0%,100% { opacity:1; transform:scale(1); } 50% { opacity:0.4; transform:scale(0.7); } }
 
 /* ── Bottom Button Bar — SIN botón mic cuadrado ── */
@@ -196,10 +202,35 @@ body::after {
 .ai-typing-cursor { display: inline-block; width: 8px; height: 14px; background: var(--primary); animation: blink 0.8s infinite; vertical-align: middle; margin-left: 5px; box-shadow: 0 0 8px var(--primary);}
 
 .chat-input-area { padding: 20px 30px; border-top: 1px solid rgba(0,212,255,0.2); display: flex; gap: 15px; background: rgba(0, 0, 0, 0.6); padding-right: 250px; }
+.model-picker { position: relative; flex: 0 0 auto; align-self: center; }
+.model-picker select {
+  appearance: none; min-width: 148px; height: 38px; padding: 0 30px 0 14px;
+  border: 1px solid rgba(0,212,255,0.38); border-radius: 999px;
+  background: rgba(2,18,32,0.94); color: var(--secondary); font: 12px 'Share Tech Mono', monospace;
+  letter-spacing: 0.5px; cursor: pointer;
+}
+.model-picker::after { content:'⌄'; position:absolute; right:13px; top:8px; color:var(--primary); pointer-events:none; font-size:16px; }
+.model-picker select:hover, .model-picker select:focus { border-color: var(--primary); background: rgba(0,70,100,0.35); }
+.model-picker select option { background: #071523; color: #dfefff; }
 .chat-input { flex: 1; background: transparent; border: none; outline: none; color: var(--secondary); font-family: 'Share Tech Mono', monospace; font-size: 16px; padding: 10px; border-bottom: 1px solid rgba(0,212,255,0.3); transition: none; cursor: text; }
 .chat-input:focus { border-bottom: 1px solid var(--primary); box-shadow: 0 5px 15px -10px var(--primary); letter-spacing: 1px; transition: none; }
 .chat-send { background: rgba(0,212,255,0.05); border: 1px solid var(--primary); color: var(--primary); padding: 0 25px; font-family: inherit; font-size: 12px; cursor: pointer; transition: none; letter-spacing: 2px;}
 .chat-send:hover { background: rgba(0,212,255,0.08); color: var(--primary); box-shadow: none; }
+
+@media (max-width: 700px) {
+  .chat-container { width: 100vw; height: 100vh; border-radius: 0; }
+  .chat-header { padding: 12px 16px; letter-spacing: 2px; }
+  .chat-messages { padding: 18px 12px 24px; }
+  .msg { max-width: 88%; font-size: 13px; }
+  .chat-input-area { padding: 12px; gap: 8px; flex-wrap: wrap; }
+  .model-picker { order: 3; width: 100%; }
+  .model-picker select { width: 100%; }
+  .chat-input { min-width: 0; }
+  .chat-send { padding: 0 14px; }
+  .status-bar { top: 14px; gap: 10px; letter-spacing: 1px; font-size: 7px; }
+  .bottom-bar { bottom: 12px; gap: 7px; }
+  .bottom-btn { width: 44px; height: 44px; }
+}
 
 #main { display:block; transition: transform 0.1s ease-out; }
 
@@ -311,7 +342,7 @@ body::after {
 </div>
 
 <div class="status-bar">
-  <span>SYS ONLINE</span><div class="status-dot"></div>
+  <span id="statusText">LISTO</span><div class="status-dot"></div>
   <span id="clockDisplay">00:00:00</span><div class="status-dot"></div>
   <span>CORE ACTIVE</span>
 </div>
@@ -323,6 +354,16 @@ body::after {
   </div>
   <div class="chat-messages" id="chatBox"></div>
   <div class="chat-input-area">
+    <label class="model-picker" title="Seleccionar modelo de IA">
+      <select id="modelPicker" aria-label="Modelo de IA" onchange="changeModel(this.value)">
+        <option value="auto">Auto</option>
+        <option value="glm">GLM-5.3 Flash</option>
+        <option value="mistral">Mistral-Nemotron</option>
+        <option value="gpt_oss">GPT-OSS</option>
+        <option value="groq">Groq</option>
+        <option value="gemini">Gemini</option>
+      </select>
+    </label>
     <input type="text" class="chat-input" id="chatInput" placeholder="Pregunta lo que quieras..." onkeypress="handleEnter(event)" autocomplete="off">
     <button class="chat-send" onclick="sendMsg()">EJECUTAR</button>
   </div>
@@ -331,27 +372,27 @@ body::after {
 <!-- Bottom bar: sin botón mic cuadrado, apagar = cerrar Jarvis -->
 <div class="bottom-bar">
   <!-- Chat / Consola -->
-  <button class="bottom-btn" onclick="toggleWindow()" title="Consola">
+  <button class="bottom-btn" onclick="toggleWindow()" title="Consola" aria-label="Abrir o cerrar consola">
     <svg viewBox="0 0 24 24"><path d="M20 2H4c-1.1 0-2 .9-2 2v18l4-4h14c1.1 0 2-.9 2-2V4c0-1.1-.9-2-2-2zm0 14H6l-2 2V4h16v12z"/></svg>
   </button>
   <!-- Configuración — abre el diálogo Qt de config -->
-  <button class="bottom-btn" onclick="window.location.href='jarvis://cmd?text=__OPEN_CONFIG__'" title="Configuración">
+  <button class="bottom-btn" onclick="window.location.href='jarvis://cmd?text=__OPEN_CONFIG__'" title="Configuración" aria-label="Abrir configuración">
     <svg viewBox="0 0 24 24"><path d="M19.14,12.94c0.04-0.3,0.06-0.61,0.06-0.94c0-0.32-0.02-0.64-0.07-0.94l2.03-1.58c0.18-0.14,0.23-0.41,0.12-0.61 l-1.92-3.32c-0.12-0.22-0.37-0.29-0.59-0.22l-2.39,0.96c-0.5-0.38-1.03-0.7-1.62-0.94L14.4,2.81c-0.04-0.24-0.24-0.41-0.48-0.41 h-3.84c-0.24,0-0.43,0.17-0.47,0.41L9.25,5.35C8.66,5.59,8.12,5.92,7.63,6.29L5.24,5.33c-0.22-0.08-0.47,0-0.59,0.22L2.74,8.87 C2.62,9.08,2.66,9.34,2.86,9.48l2.03,1.58C4.84,11.36,4.8,11.69,4.8,12s0.02,0.64,0.07,0.94l-2.03,1.58 c-0.18,0.14-0.23,0.41-0.12,0.61l1.92,3.32c0.12,0.22,0.37,0.29,0.59,0.22l2.39-0.96c0.5,0.38,1.03,0.7,1.62,0.94l0.36,2.54 c0.05,0.24,0.24,0.41,0.48,0.41h3.84c0.24,0,0.44-0.17,0.47-0.41l0.36-2.54c0.59-0.24,1.13-0.56,1.62-0.94l2.39,0.96 c0.22,0.08,0.47,0,0.59-0.22l1.92-3.32c0.12-0.22,0.07-0.47-0.12-0.61L19.14,12.94z M12,15.6c-1.98,0-3.6-1.62-3.6-3.6 s1.62-3.6,3.6-3.6s3.6,1.62,3.6,3.6S13.98,15.6,12,15.6z"/></svg>
   </button>
   <!-- Comandos -->
-  <button class="bottom-btn" onclick="window.location.href='jarvis://cmd?text=__OPEN_COMMANDS__'" title="Comandos">
+  <button class="bottom-btn" onclick="window.location.href='jarvis://cmd?text=__OPEN_COMMANDS__'" title="Comandos" aria-label="Abrir lista de comandos">
     <svg viewBox="0 0 24 24"><path d="M4 4h16v16H4V4zm2 3v2h8V7H6zm0 4v2h5v-2H6zm0 4v2h8v-2H6zm10-8h2v2h-2V7zm0 4h2v2h-2v-2zm0 4h2v2h-2v-2z"/></svg>
   </button>
   <!-- Extensiones: conexiones independientes -->
-  <button class="bottom-btn" onclick="window.location.href='jarvis://cmd?text=__OPEN_EXTENSIONS__'" title="Extensiones">
+  <button class="bottom-btn" onclick="window.location.href='jarvis://cmd?text=__OPEN_EXTENSIONS__'" title="Extensiones" aria-label="Abrir extensiones">
     <svg viewBox="0 0 24 24"><path d="M20.5 11H19V7a2 2 0 0 0-2-2h-4V3.5a2.5 2.5 0 0 0-5 0V5H4a2 2 0 0 0-2 2v4h1.5a2.5 2.5 0 0 1 0 5H2v4a2 2 0 0 0 2 2h4v-1.5a2.5 2.5 0 0 1 5 0V22h4a2 2 0 0 0 2-2v-4h1.5a2.5 2.5 0 0 0 0-5z"/></svg>
   </button>
   <!-- Micrófono — en línea con los demás botones -->
-  <button class="bottom-btn" id="micBtn" title="Micrófono">
+  <button class="bottom-btn" id="micBtn" title="Micrófono" aria-label="Activar o detener micrófono">
     <svg viewBox="0 0 24 24"><path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/><path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/></svg>
   </button>
   <!-- Visor de pantalla en tiempo real -->
-  <button class="bottom-btn" onclick="window.location.href='jarvis://cmd?text=' + encodeURIComponent('ver pantalla')" title="Ver pantalla">
+  <button class="bottom-btn" onclick="window.location.href='jarvis://cmd?text=' + encodeURIComponent('ver pantalla')" title="Ver pantalla" aria-label="Ver pantalla">
     <svg viewBox="0 0 24 24"><path d="M21 3H3c-1.1 0-2 .9-2 2v12c0 1.1.9 2 2 2h7v2H7v2h10v-2h-3v-2h7c1.1 0 2-.9 2-2V5c0-1.1-.9-2-2-2zm0 14H3V5h18v12z"/></svg>
   </button>
 </div>
@@ -864,6 +905,19 @@ function triggerAgent(displayName, commandId) {
 const chatContainer = document.getElementById('chatContainer'), mainWrap = document.getElementById('mainWrap');
 const chatBox = document.getElementById('chatBox'), chatInput = document.getElementById('chatInput');
 
+document.addEventListener('keydown', (event) => {
+  if (event.key === 'Escape' && chatContainer.classList.contains('active')) toggleWindow();
+  if (event.ctrlKey && event.key.toLowerCase() === 'l') {
+    event.preventDefault();
+    if (!chatContainer.classList.contains('active')) toggleWindow();
+    chatInput.focus();
+  }
+  if (event.ctrlKey && event.shiftKey && event.key.toLowerCase() === 'm') {
+    event.preventDefault();
+    micBtn.click();
+  }
+});
+
 function toggleWindow() {
   const isActive = chatContainer.classList.contains('active');
   if (isActive) {
@@ -881,6 +935,16 @@ function toggleWindow() {
 }
 
 function handleEnter(e) { if (e.key === 'Enter') sendMsg(); }
+
+function changeModel(model) {
+  const labels = {
+    auto: 'Auto', glm: 'GLM-5.3 Flash', mistral: 'Mistral-Nemotron',
+    gpt_oss: 'GPT-OSS', groq: 'Groq', gemini: 'Gemini'
+  };
+  const picker = document.getElementById('modelPicker');
+  if (picker) picker.title = `Modelo activo: ${labels[model] || 'Auto'}`;
+  window.location.href = 'jarvis://cmd?text=' + encodeURIComponent('__SET_MODEL__:' + model);
+}
 
 // ── Efecto Ciber-Desencriptación ──
 const letters = "ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789!@#$%^&*()";
@@ -912,10 +976,41 @@ function appendMessage(text, sender, typewrite = false) {
     const interval = cyberDecodeEffect(textSpan, plainText, 25);
     setTimeout(() => { cursorEl.style.display = 'none'; }, plainText.length * 25 * 2 + 100);
   } else {
-    msgDiv.innerHTML = `${text} <span class="msg-time">${time}</span>`;
+    msgDiv.innerHTML = `${sanitizeJarvisHtml(text)} <span class="msg-time">${time}</span>`;
     setTimeout(() => { chatBox.scrollTop = chatBox.scrollHeight; }, 50);
   }
 }
+
+function sanitizeJarvisHtml(value) {
+  const template = document.createElement('template');
+  template.innerHTML = String(value || '');
+  const allowed = new Set(['B','BR','DIV','EM','H3','H4','I','IMG','LI','OL','P','PRE','SPAN','STRONG','TABLE','TBODY','TD','TH','TR','UL','A']);
+  const attrs = new Set(['class','href','src','alt','title','target','rel','style','colspan','rowspan']);
+  const walker = document.createTreeWalker(template.content, NodeFilter.SHOW_ELEMENT);
+  const nodes = [];
+  while (walker.nextNode()) nodes.push(walker.currentNode);
+  for (const node of nodes) {
+    if (!allowed.has(node.tagName)) { node.replaceWith(document.createTextNode(node.textContent || '')); continue; }
+    for (const attr of Array.from(node.attributes)) {
+      const name = attr.name.toLowerCase();
+      const value = attr.value.trim();
+      if (!attrs.has(name) || name.startsWith('on') || /javascript\s*:|data\s*:/i.test(value)) node.removeAttribute(attr.name);
+      if (name === 'style' && /url\s*\(|expression\s*\(|behavior\s*:/i.test(value)) node.removeAttribute(attr.name);
+      if ((name === 'href' || name === 'src') && !/^(https?:|mailto:|#)/i.test(value)) node.removeAttribute(attr.name);
+    }
+    if (node.tagName === 'A') { node.setAttribute('target','_blank'); node.setAttribute('rel','noopener noreferrer'); }
+  }
+  return template.innerHTML;
+}
+
+window.jarvisSetStatus = function(state) {
+  const bar = document.querySelector('.status-bar');
+  const label = document.getElementById('statusText');
+  if (!bar || !label) return;
+  const processing = state === 'processing';
+  bar.classList.toggle('processing', processing);
+  label.textContent = processing ? 'PROCESANDO' : 'LISTO';
+};
 
 function sendMsg() {
   const text = chatInput.value.trim(); if(!text) return;
@@ -956,7 +1051,7 @@ window.jarvisAppendHtmlDirect = function(htmlContent) {
   const msgDiv = document.createElement('div');
   msgDiv.className = 'msg ai';
   const time = new Date().toLocaleTimeString('es-ES', {hour: '2-digit', minute: '2-digit'});
-  msgDiv.innerHTML = payload + `<span class="msg-time">${time}</span>`;
+  msgDiv.innerHTML = sanitizeJarvisHtml(payload) + `<span class="msg-time">${time}</span>`;
   root.appendChild(msgDiv);
   setTimeout(() => { root.scrollTop = root.scrollHeight; }, 50);
   return true;

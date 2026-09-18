@@ -1,14 +1,16 @@
-from PyInstaller.utils.hooks import collect_all
-
 import os
 
-project = os.path.abspath(os.getcwd())
+spec_path = globals().get("SPEC") or os.path.join(os.getcwd(), "Jarvis.spec")
+project = os.path.dirname(os.path.abspath(spec_path))
+
 
 datas = [
     (project + r"\V5.html", "."),
-    (project + r"\hand_landmarker.task", "."),
     (project + r"\jarvis_logo.svg", "."),
 ]
+model_path = os.path.join(project, "models", "hand_landmarker.task")
+if os.path.exists(model_path):
+    datas.append((model_path, "models"))
 binaries = []
 hiddenimports = [
     "PySide6.QtWebEngineCore",
@@ -16,18 +18,23 @@ hiddenimports = [
     "PySide6.QtSvg",
     "mediapipe",
     "sounddevice",
+    "edge_tts",
     "googleapiclient.discovery",
     "google.oauth2.credentials",
 ]
 
-for package in ("PySide6", "mediapipe"):
-    try:
-        package_datas, package_binaries, package_hidden = collect_all(package)
-        datas += package_datas
-        binaries += package_binaries
-        hiddenimports += package_hidden
-    except Exception:
-        pass
+hiddenimports += [
+    "PySide6.QtCore",
+    "PySide6.QtGui",
+    "PySide6.QtWidgets",
+    "PySide6.QtNetwork",
+    "PySide6.QtWebChannel",
+    "PySide6.QtWebEngineCore",
+    "PySide6.QtWebEngineWidgets",
+    "mediapipe.tasks.python",
+    "mediapipe.tasks.python.vision",
+    "edge_tts.communicate",
+]
 
 a = Analysis(
     [project + r"\Jarvis_main.py"],

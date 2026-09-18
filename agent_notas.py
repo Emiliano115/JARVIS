@@ -28,9 +28,11 @@
 #     "alarma_eliminar" → params: {id | etiqueta}
 #
 #   Recordatorios:
-#     "recordatorio_crear"    → params: {texto, fecha_hora?, minutos?}
+#     "recordatorio_crear"    → params: {texto, fecha_hora?, minutos?, acompanamiento?, categoria?}
 #     "recordatorio_listar"   → params: {}
 #     "recordatorio_eliminar" → params: {id | texto}
+#     "recordatorio_confirmar" → params: {id? | texto?}
+#     "acompanamiento_resumen" → params: {}
 #
 #   Memoria de sesión:
 #     "memoria_guardar"  → params: {clave, valor}
@@ -52,6 +54,8 @@ import re
 import sqlite3
 import threading
 import time
+from contextlib import contextmanager
+from html import escape
 from datetime import datetime, timedelta
 from typing import Optional
 
@@ -134,10 +138,18 @@ def _db_path() -> str:
     return _DB_FILE
 
 
-def _get_conn() -> sqlite3.Connection:
+@contextmanager
+def _get_conn():
     conn = sqlite3.connect(_db_path(), check_same_thread=False)
     conn.row_factory = sqlite3.Row
-    return conn
+    try:
+        yield conn
+        conn.commit()
+    except Exception:
+        conn.rollback()
+        raise
+    finally:
+        conn.close()
 
 
 def _init_db():
@@ -172,9 +184,68 @@ def _init_db():
             CREATE TABLE IF NOT EXISTS memoria_sesion (
                 clave       TEXT    PRIMARY KEY,
                 valor       TEXT    NOT NULL,
+                categoria   TEXT    NOT NULL DEFAULT 'general',
+                origen      TEXT    NOT NULL DEFAULT 'usuario',
                 actualizado TEXT    NOT NULL
             );
+
+            CREATE TABLE IF NOT EXISTS contactos_confianza (
+                id        INTEGER PRIMARY KEY AUTOINCREMENT,
+                nombre    TEXT NOT NULL UNIQUE,
+                destino   TEXT NOT NULL,
+                canal     TEXT NOT NULL DEFAULT 'correo',
+                correo    TEXT NOT NULL DEFAULT '',
+                telefono  TEXT NOT NULL DEFAULT '',
+                creado    TEXT NOT NULL
+            );
+
+                CREATE TABLE IF NOT EXISTS rutinas (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    nombre      TEXT NOT NULL UNIQUE,
+                    acciones    TEXT NOT NULL,
+                    activa      INTEGER NOT NULL DEFAULT 1,
+                    proxima     TEXT,
+                    creada      TEXT NOT NULL,
+                    ultima      TEXT
+                );
+
+                CREATE TABLE IF NOT EXISTS rutinas_log (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    rutina_id   INTEGER NOT NULL,
+                    accion      TEXT NOT NULL,
+                    ejecutada   TEXT NOT NULL
+                );
         """)
+        columnas_contactos = {row[1] for row in conn.execute("PRAGMA table_info(contactos_confianza)")}
+        for columna, sentencia in {
+            "correo": "ALTER TABLE contactos_confianza ADD COLUMN correo TEXT NOT NULL DEFAULT ''",
+            "telefono": "ALTER TABLE contactos_confianza ADD COLUMN telefono TEXT NOT NULL DEFAULT ''",
+        }.items():
+            if columna not in columnas_contactos:
+                conn.execute(sentencia)
+        columnas_memoria = {row[1] for row in conn.execute("PRAGMA table_info(memoria_sesion)")}
+        for columna, sentencia in {
+            "categoria": "ALTER TABLE memoria_sesion ADD COLUMN categoria TEXT NOT NULL DEFAULT 'general'",
+            "origen": "ALTER TABLE memoria_sesion ADD COLUMN origen TEXT NOT NULL DEFAULT 'usuario'",
+        }.items():
+            if columna not in columnas_memoria:
+                conn.execute(sentencia)
+        conn.execute(
+            """UPDATE contactos_confianza SET correo=destino
+               WHERE correo='' AND canal='correo' AND destino LIKE '%@%'"""
+        )
+        # Migración ligera para instalaciones que ya tienen la base creada.
+        columnas = {row[1] for row in conn.execute("PRAGMA table_info(recordatorios)")}
+        migraciones = {
+            "acompanamiento": "ALTER TABLE recordatorios ADD COLUMN acompanamiento INTEGER NOT NULL DEFAULT 0",
+            "categoria": "ALTER TABLE recordatorios ADD COLUMN categoria TEXT NOT NULL DEFAULT ''",
+            "intentos": "ALTER TABLE recordatorios ADD COLUMN intentos INTEGER NOT NULL DEFAULT 0",
+            "max_intentos": "ALTER TABLE recordatorios ADD COLUMN max_intentos INTEGER NOT NULL DEFAULT 3",
+            "intervalo_minutos": "ALTER TABLE recordatorios ADD COLUMN intervalo_minutos INTEGER NOT NULL DEFAULT 5",
+        }
+        for columna, sentencia in migraciones.items():
+            if columna not in columnas:
+                conn.execute(sentencia)
 
 
 # =============================================================================
@@ -553,7 +624,9 @@ def _parsear_fecha_hora(fecha_hora_str: str, minutos: int = None) -> Optional[da
     return None
 
 
-def recordatorio_crear(texto: str, fecha_hora_str: str = "", minutos: int = None, chat_widget=None):
+def recordatorio_crear(texto: str, fecha_hora_str: str = "", minutos: int = None,
+                       acompanamiento: bool = False, categoria: str = "",
+                       max_intentos: int = 3, intervalo_minutos: int = 5, chat_widget=None):
     """
     Crea un recordatorio.
     texto         : qué decir cuando llegue la hora
@@ -568,10 +641,25 @@ def recordatorio_crear(texto: str, fecha_hora_str: str = "", minutos: int = None
     ahora   = datetime.now().isoformat(timespec="seconds")
     dt_iso  = dt.isoformat(timespec="seconds")
 
+    acompanamiento = bool(acompanamiento)
+    categoria = str(categoria or "").strip()[:40]
+    try:
+        max_intentos = max(1, min(int(max_intentos), 10))
+    except (TypeError, ValueError):
+        max_intentos = 3
+    try:
+        intervalo_minutos = max(1, min(int(intervalo_minutos), 120))
+    except (TypeError, ValueError):
+        intervalo_minutos = 5
+
     with _get_conn() as conn:
         cur = conn.execute(
-            "INSERT INTO recordatorios (texto, fecha_hora, completado, creado) VALUES (?,?,0,?)",
-            (texto.strip(), dt_iso, ahora)
+            """INSERT INTO recordatorios
+               (texto, fecha_hora, completado, creado, acompanamiento, categoria,
+                intentos, max_intentos, intervalo_minutos)
+               VALUES (?,?,0,?,?,?,?,?,?)""",
+            (texto.strip(), dt_iso, ahora, int(acompanamiento), categoria,
+             0, max_intentos, intervalo_minutos)
         )
         rid = cur.lastrowid
 
@@ -586,7 +674,8 @@ def recordatorio_crear(texto: str, fecha_hora_str: str = "", minutos: int = None
     )
     _bridge_html(_burbuja(html))
     _bridge_scroll()
-    _hablar(f"Recordatorio creado: {texto}. Te aviso {msg_tiempo}.", chat_widget)
+    modo = " con seguimiento" if acompanamiento else ""
+    _hablar(f"Recordatorio creado{modo}: {texto}. Te aviso {msg_tiempo}.", chat_widget)
 
 
 def recordatorio_listar(chat_widget=None):
@@ -641,19 +730,227 @@ def recordatorio_eliminar(id_o_texto: str, chat_widget=None):
     _bridge_scroll()
 
 
-def _disparar_recordatorio(rec: sqlite3.Row):
-    """Anuncia el recordatorio y lo marca como completado."""
-    texto = rec["texto"]
-    _hablar(f"Recordatorio: {texto}", None)
+def recordatorio_confirmar(id_o_texto: str = "", chat_widget=None):
+    """Confirma un recordatorio de acompañamiento pendiente."""
+    with _get_conn() as conn:
+        if id_o_texto:
+            try:
+                row = conn.execute(
+                    "SELECT * FROM recordatorios WHERE id=? AND completado=0 AND acompanamiento=1",
+                    (int(id_o_texto),)
+                ).fetchone()
+            except (TypeError, ValueError):
+                row = conn.execute(
+                    "SELECT * FROM recordatorios WHERE texto LIKE ? AND completado=0 AND acompanamiento=1 LIMIT 1",
+                    (f"%{id_o_texto}%",)
+                ).fetchone()
+        else:
+            row = conn.execute(
+                "SELECT * FROM recordatorios WHERE completado=0 AND acompanamiento=1 ORDER BY fecha_hora LIMIT 1"
+            ).fetchone()
+
+        if not row:
+            _hablar("No encontré un recordatorio de acompañamiento pendiente para confirmar.", chat_widget)
+            return
+        conn.execute("UPDATE recordatorios SET completado=1 WHERE id=?", (row["id"],))
+
+    texto = row["texto"]
     html = (
-        f'<p style="color:#7ec8e3;font-size:15px;font-weight:bold;">'
-        f'🔔 RECORDATORIO</p>'
+        f'<p style="color:#a8e6cf;font-size:15px;font-weight:bold;">✓ Recordatorio confirmado</p>'
         f'<p style="color:#ccd6f6;font-size:14px;">{texto}</p>'
     )
     _bridge_html(_burbuja(html))
     _bridge_scroll()
+    _hablar(f"Confirmado: {texto}.", chat_widget)
+
+
+def acompanamiento_resumen(chat_widget=None):
+    """Resume la agenda local del día y los seguimientos pendientes."""
+    ahora = datetime.now()
+    inicio = ahora.replace(hour=0, minute=0, second=0, microsecond=0).isoformat(timespec="seconds")
+    fin = (ahora + timedelta(days=1)).replace(hour=0, minute=0, second=0, microsecond=0).isoformat(timespec="seconds")
+
     with _get_conn() as conn:
-        conn.execute("UPDATE recordatorios SET completado=1 WHERE id=?", (rec["id"],))
+        recordatorios = conn.execute(
+            """SELECT * FROM recordatorios
+               WHERE completado=0 AND fecha_hora>=? AND fecha_hora<?
+               ORDER BY fecha_hora LIMIT 20""",
+            (inicio, fin)
+        ).fetchall()
+        alarmas = conn.execute(
+            """SELECT * FROM alarmas
+               WHERE activa=1 AND hora>=? AND hora<?
+               ORDER BY hora LIMIT 20""",
+            (inicio, fin)
+        ).fetchall()
+
+    if not recordatorios and not alarmas:
+        _hablar("No tienes recordatorios ni alarmas pendientes para hoy.", chat_widget)
+        return
+
+    bloques = [f'<p style="color:#7ec8e3;font-weight:bold;">📅 Resumen de hoy ({ahora.strftime("%d/%m")})</p>']
+    voz = []
+    if recordatorios:
+        items = []
+        for row in recordatorios:
+            marca = " · requiere confirmación" if row["acompanamiento"] else ""
+            items.append(
+                f'<li style="color:#ccd6f6;">{row["fecha_hora"][11:16]} — '
+                f'{row["texto"][:100]}{marca}</li>'
+            )
+            voz.append(f"a las {row['fecha_hora'][11:16]}: {row['texto']}")
+        bloques.append('<p style="color:#7ec8e3;">🔔 Recordatorios</p><ul>' + ''.join(items) + '</ul>')
+    if alarmas:
+        items = [
+            f'<li style="color:#ccd6f6;">{row["hora"][11:16]} — {row["etiqueta"]}</li>'
+            for row in alarmas
+        ]
+        bloques.append('<p style="color:#ffd166;">⏰ Alarmas</p><ul>' + ''.join(items) + '</ul>')
+        voz.extend(f"a las {row['hora'][11:16]}: {row['etiqueta']}" for row in alarmas)
+
+    _bridge_html(_burbuja(''.join(bloques)))
+    _bridge_scroll()
+    total = len(recordatorios) + len(alarmas)
+    detalle = '; '.join(voz[:4])
+    _hablar(f"Tienes {total} pendientes hoy. {detalle}.", chat_widget)
+
+
+def contacto_confianza_guardar(nombre: str, destino: str, canal: str = "correo",
+                               chat_widget=None, correo: str = "", telefono: str = ""):
+    """Guarda un contacto autorizado para futuras alertas, sin enviar nada."""
+    nombre = str(nombre or "").strip()[:80]
+    destino = str(destino or "").strip()[:160]
+    canal = str(canal or "correo").strip().lower()[:30]
+    correo = str(correo or (destino if canal == "correo" else "")).strip()[:160]
+    telefono = str(telefono or (destino if canal == "telefono" else "")).strip()[:40]
+    if not destino:
+        destino = correo or telefono
+    if not nombre or not destino:
+        _hablar("Necesito el nombre y el destino del contacto.", chat_widget)
+        return
+    ahora = datetime.now().isoformat(timespec="seconds")
+    with _get_conn() as conn:
+        conn.execute(
+                """INSERT INTO contactos_confianza
+                    (nombre, destino, canal, correo, telefono, creado)
+                    VALUES (?,?,?,?,?,?)
+                    ON CONFLICT(nombre) DO UPDATE SET destino=excluded.destino,
+                    canal=excluded.canal, correo=excluded.correo, telefono=excluded.telefono""",
+                (nombre, destino, canal, correo, telefono, ahora)
+        )
+    _hablar(f"Contacto de confianza guardado: {nombre}. Todavía no se enviará ningún mensaje.", chat_widget)
+    _bridge_html(_burbuja(
+        f'<p style="color:#a8e6cf;font-weight:bold;">Contacto guardado</p>'
+        f'<p style="color:#ccd6f6;">{escape(nombre)} · canal preferido: {escape(canal)}</p>'
+    ))
+    _bridge_scroll()
+
+
+def contactos_confianza_listar(chat_widget=None):
+    with _get_conn() as conn:
+        rows = conn.execute("SELECT * FROM contactos_confianza ORDER BY nombre").fetchall()
+    if not rows:
+        _hablar("No tienes contactos de confianza configurados.", chat_widget)
+        return
+    filas = ''.join(
+        f'<tr><td style="color:#a8e6cf;padding:3px 10px;">{escape(row["nombre"])}</td>'
+        f'<td style="color:#ccd6f6;padding:3px 8px;">{escape(row["correo"] or "-")}</td>'
+        f'<td style="color:#ccd6f6;padding:3px 8px;">{escape(row["telefono"] or "-")}</td>'
+        f'<td style="color:#ccd6f6;padding:3px 8px;">{escape(row["canal"])}</td></tr>'
+        for row in rows
+    )
+    _bridge_html(_burbuja(
+        f'<p style="color:#a8e6cf;font-weight:bold;">Contactos de confianza ({len(rows)})</p>'
+        f'<table cellspacing="2">{filas}</table>'
+    ))
+    _bridge_scroll()
+    _hablar(f"Tienes {len(rows)} contactos de confianza.", chat_widget)
+
+
+def contacto_confianza_eliminar(nombre: str, chat_widget=None):
+    nombre = str(nombre or "").strip()
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT nombre FROM contactos_confianza WHERE nombre LIKE ? LIMIT 1",
+            (f"%{nombre}%",)
+        ).fetchone()
+        if row:
+            conn.execute("DELETE FROM contactos_confianza WHERE nombre=?", (row["nombre"],))
+    if not row:
+        _hablar(f"No encontré el contacto '{nombre}'.", chat_widget)
+        return
+    _hablar(f"Contacto de confianza eliminado: {row['nombre']}.", chat_widget)
+
+
+def contacto_confianza_obtener(nombre: str):
+    """Devuelve un contacto de confianza por coincidencia de nombre."""
+    nombre = str(nombre or "").strip()
+    if not nombre:
+        return None
+    with _get_conn() as conn:
+        row = conn.execute(
+            "SELECT * FROM contactos_confianza WHERE nombre LIKE ? LIMIT 1",
+            (f"%{nombre}%",)
+        ).fetchone()
+    return dict(row) if row else None
+
+
+def guardar_correo_contacto(destinatario: str, nombre: str = ""):
+    """Actualiza o crea el correo de un contacto tras un envío confirmado."""
+    destinatario = str(destinatario or "").strip()
+    nombre = str(nombre or "").strip()[:80]
+    if not destinatario or "@" not in destinatario:
+        return
+    with _get_conn() as conn:
+        row = None
+        if nombre:
+            row = conn.execute(
+                "SELECT id FROM contactos_confianza WHERE nombre LIKE ? LIMIT 1",
+                (f"%{nombre}%",)
+            ).fetchone()
+        if row:
+            conn.execute(
+                "UPDATE contactos_confianza SET destino=?, correo=?, canal='correo' WHERE id=?",
+                (destinatario, destinatario, row["id"])
+            )
+        else:
+            conn.execute(
+                "INSERT OR IGNORE INTO contactos_confianza (nombre, destino, canal, correo, telefono, creado) VALUES (?,?,?,?,?,?)",
+                (nombre or destinatario, destinatario, "correo", destinatario, "", datetime.now().isoformat(timespec="seconds"))
+            )
+
+
+def _disparar_recordatorio(rec: sqlite3.Row):
+    """Anuncia un recordatorio y conserva seguimiento si está activado."""
+    texto = rec["texto"]
+    es_acompanamiento = bool(rec["acompanamiento"])
+    if es_acompanamiento:
+        intento = int(rec["intentos"] or 0) + 1
+        max_intentos = int(rec["max_intentos"] or 3)
+        _hablar(f"Recordatorio importante: {texto}. Di 'ya lo hice' cuando lo hayas realizado.", None)
+    else:
+        intento = 1
+        max_intentos = 1
+        _hablar(f"Recordatorio: {texto}", None)
+    html = (
+        f'<p style="color:#7ec8e3;font-size:15px;font-weight:bold;">'
+        f'🔔 RECORDATORIO</p>'
+        f'<p style="color:#ccd6f6;font-size:14px;">{texto}</p>'
+        f'{"<p style=\'color:#ffd166;font-size:12px;\'>Pendiente de confirmación (" + str(intento) + "/" + str(max_intentos) + ")</p>" if es_acompanamiento else ""}'
+    )
+    _bridge_html(_burbuja(html))
+    _bridge_scroll()
+    with _get_conn() as conn:
+        if es_acompanamiento and intento < max_intentos:
+            siguiente = datetime.now() + timedelta(minutes=int(rec["intervalo_minutos"] or 5))
+            conn.execute(
+                "UPDATE recordatorios SET fecha_hora=?, intentos=? WHERE id=?",
+                (siguiente.isoformat(timespec="seconds"), intento, rec["id"])
+            )
+        elif es_acompanamiento:
+            conn.execute("UPDATE recordatorios SET intentos=? WHERE id=?", (intento, rec["id"]))
+        else:
+            conn.execute("UPDATE recordatorios SET completado=1 WHERE id=?", (rec["id"],))
 
 
 # =============================================================================
@@ -661,6 +958,10 @@ def _disparar_recordatorio(rec: sqlite3.Row):
 # =============================================================================
 
 _monitor_activo = False
+_recordatorios_en_proceso = set()
+_recordatorios_lock = threading.Lock()
+_alarmas_en_proceso = set()
+_alarmas_lock = threading.Lock()
 
 
 def _arrancar_monitor():
@@ -674,12 +975,13 @@ def _arrancar_monitor():
 def _loop_monitor():
     """Revisa cada 30 segundos si hay alarmas o recordatorios que disparar."""
     while True:
-        time.sleep(30)
         try:
             _revisar_alarmas()
             _revisar_recordatorios()
+            _revisar_rutinas()
         except Exception as e:
             print(f"[agent_notas monitor] {e}")
+        time.sleep(5)
 
 
 def _revisar_alarmas():
@@ -692,9 +994,21 @@ def _revisar_alarmas():
         try:
             dt = datetime.fromisoformat(r["hora"])
             if dt <= ahora:
-                threading.Thread(target=_disparar_alarma, args=(r,), daemon=True).start()
+                with _alarmas_lock:
+                    if r["id"] in _alarmas_en_proceso:
+                        continue
+                    _alarmas_en_proceso.add(r["id"])
+                threading.Thread(target=_disparar_alarma_segura, args=(r,), daemon=True).start()
         except Exception:
             pass
+
+
+def _disparar_alarma_segura(alarma: sqlite3.Row):
+    try:
+        _disparar_alarma(alarma)
+    finally:
+        with _alarmas_lock:
+            _alarmas_en_proceso.discard(alarma["id"])
 
 
 def _revisar_recordatorios():
@@ -707,9 +1021,21 @@ def _revisar_recordatorios():
         try:
             dt = datetime.fromisoformat(r["fecha_hora"])
             if dt <= ahora:
-                threading.Thread(target=_disparar_recordatorio, args=(r,), daemon=True).start()
+                with _recordatorios_lock:
+                    if r["id"] in _recordatorios_en_proceso:
+                        continue
+                    _recordatorios_en_proceso.add(r["id"])
+                threading.Thread(target=_disparar_recordatorio_seguro, args=(r,), daemon=True).start()
         except Exception:
             pass
+
+
+def _disparar_recordatorio_seguro(rec: sqlite3.Row):
+    try:
+        _disparar_recordatorio(rec)
+    finally:
+        with _recordatorios_lock:
+            _recordatorios_en_proceso.discard(rec["id"])
 
 
 # =============================================================================
@@ -723,19 +1049,25 @@ def _revisar_recordatorios():
 #   · Hechos que el usuario quiere recordar
 # =============================================================================
 
-def memoria_guardar(clave: str, valor: str, chat_widget=None):
+def memoria_guardar(clave: str, valor: str, categoria: str = "general",
+                    origen: str = "usuario", chat_widget=None):
     """Guarda o actualiza un dato en la memoria de sesión."""
     ahora = datetime.now().isoformat(timespec="seconds")
+    categoria = str(categoria or "general").strip().lower()[:40] or "general"
+    origen = str(origen or "usuario").strip()[:80] or "usuario"
     with _get_conn() as conn:
         conn.execute(
-            """INSERT INTO memoria_sesion (clave, valor, actualizado)
-               VALUES (?,?,?)
-               ON CONFLICT(clave) DO UPDATE SET valor=excluded.valor, actualizado=excluded.actualizado""",
-            (clave.strip().lower(), valor.strip(), ahora)
+            """INSERT INTO memoria_sesion (clave, valor, categoria, origen, actualizado)
+               VALUES (?,?,?,?,?)
+               ON CONFLICT(clave) DO UPDATE SET valor=excluded.valor,
+               categoria=excluded.categoria, origen=excluded.origen,
+               actualizado=excluded.actualizado""",
+            (clave.strip().lower(), valor.strip(), categoria, origen, ahora)
         )
     html = (
         f'<p style="color:#a8e6cf;font-size:12px;">'
-        f'🧠 Memorizado: <b>{clave}</b> → {valor[:80]}</p>'
+        f'🧠 Memorizado: <b>{escape(clave)}</b> → {escape(valor[:80])}'
+        f' <span style="color:#8899bb;">[{escape(categoria)}]</span></p>'
     )
     _bridge_html(_burbuja(html))
     _bridge_scroll()
@@ -760,8 +1092,10 @@ def memoria_leer(clave: str = "", chat_widget=None):
 
     filas = "".join(
         f'<tr>'
-        f'<td style="color:#a8e6cf;padding:3px 10px;">{r["clave"]}</td>'
-        f'<td style="color:#ccd6f6;padding:3px 8px;">{r["valor"][:80]}</td>'
+        f'<td style="color:#a8e6cf;padding:3px 10px;">{escape(r["clave"])}</td>'
+        f'<td style="color:#ccd6f6;padding:3px 8px;">{escape(r["valor"][:80])}</td>'
+        f'<td style="color:#7ec8e3;font-size:11px;padding:3px 8px;">{escape(r["categoria"])}</td>'
+        f'<td style="color:#667799;font-size:11px;padding:3px 8px;">{escape(r["origen"])}</td>'
         f'<td style="color:#556677;font-size:11px;padding:3px 8px;">{r["actualizado"][:10]}</td>'
         f'</tr>'
         for r in rows
@@ -773,6 +1107,59 @@ def memoria_leer(clave: str = "", chat_widget=None):
     _bridge_html(_burbuja(html))
     _bridge_scroll()
     _hablar(f"Tengo {len(rows)} cosas en memoria.", chat_widget)
+
+
+def memoria_buscar(termino: str, chat_widget=None):
+    """Busca un término en claves, valores, categorías y origen."""
+    termino = str(termino or "").strip().lower()
+    if not termino:
+        _hablar("Dime qué quieres buscar en la memoria.", chat_widget)
+        return
+    patron = f"%{termino}%"
+    with _get_conn() as conn:
+        rows = conn.execute(
+            """SELECT * FROM memoria_sesion
+               WHERE lower(clave) LIKE ? OR lower(valor) LIKE ?
+                  OR lower(categoria) LIKE ? OR lower(origen) LIKE ?
+               ORDER BY actualizado DESC LIMIT 30""",
+            (patron, patron, patron, patron),
+        ).fetchall()
+    if not rows:
+        _hablar(f"No encontré memoria relacionada con {termino}.", chat_widget)
+        return
+    filas = "".join(
+        f'<tr><td style="color:#a8e6cf;padding:3px 8px;">{escape(r["clave"])}</td>'
+        f'<td style="color:#ccd6f6;padding:3px 8px;">{escape(r["valor"][:100])}</td>'
+        f'<td style="color:#7ec8e3;padding:3px 8px;">{escape(r["categoria"])}</td>'
+        f'<td style="color:#556677;padding:3px 8px;">{r["actualizado"][:10]}</td></tr>'
+        for r in rows
+    )
+    _bridge_html(_burbuja(
+        f'<p style="color:#a8e6cf;font-weight:bold;">🔎 Memoria encontrada ({len(rows)})</p>'
+        f'<table cellspacing="2">{filas}</table>'
+    ))
+    _bridge_scroll()
+    _hablar(f"Encontré {len(rows)} recuerdos relacionados.", chat_widget)
+
+
+def memoria_olvidar(termino: str, chat_widget=None):
+    """Elimina entradas cuyo nombre o contenido coincide con el término."""
+    termino = str(termino or "").strip().lower()
+    if not termino:
+        _hablar("Dime qué recuerdo quieres olvidar.", chat_widget)
+        return
+    patron = f"%{termino}%"
+    with _get_conn() as conn:
+        cur = conn.execute(
+            """DELETE FROM memoria_sesion
+               WHERE lower(clave) LIKE ? OR lower(valor) LIKE ?""",
+            (patron, patron),
+        )
+        borrados = cur.rowcount
+    mensaje = f"He olvidado {borrados} recuerdo(s) relacionado(s) con {termino}."
+    _bridge_html(_burbuja(f'<p style="color:#ff9b9b;">🧠 {escape(mensaje)}</p>'))
+    _bridge_scroll()
+    _hablar(mensaje, chat_widget)
 
 
 def memoria_resumir(chat_widget=None):
@@ -866,6 +1253,240 @@ def memoria_limpiar(chat_widget=None):
     _bridge_scroll()
 
 
+def memoria_exportar(chat_widget=None):
+    """Exporta memoria estructurada a un JSON local para el usuario."""
+    ahora = datetime.now()
+    with _get_conn() as conn:
+        filas = [dict(row) for row in conn.execute(
+            "SELECT clave, valor, categoria, origen, actualizado FROM memoria_sesion ORDER BY actualizado DESC"
+        ).fetchall()]
+    perfil = _ctx.get("memoria_usuario", {})
+    destino = os.path.join(_base_path(), f"jarvis_memoria_export_{ahora.strftime('%Y%m%d_%H%M%S')}.json")
+    datos = {"exportado": ahora.isoformat(timespec="seconds"), "perfil": perfil, "memoria_sesion": filas}
+    with open(destino, "w", encoding="utf-8") as f:
+        json.dump(datos, f, indent=2, ensure_ascii=False)
+    _bridge_html(_burbuja(f'<p style="color:#a8e6cf;">📦 Memoria exportada en {escape(destino)}</p>'))
+    _bridge_scroll()
+    _hablar("He exportado tu memoria a un archivo local.", chat_widget)
+
+
+def memoria_borrar_todo(chat_widget=None):
+    """Borra memoria de sesión y reinicia el perfil personal, sin tocar notas."""
+    with _get_conn() as conn:
+        conn.execute("DELETE FROM memoria_sesion")
+    perfil = _ctx.get("memoria_usuario")
+    guardar = _ctx.get("guardar_memoria")
+    if isinstance(perfil, dict):
+        for clave in ("nombre", "ciudad", "barrio", "trabajo", "colegio", "edad", "mascotas"):
+            perfil[clave] = None
+        perfil["hobbies"] = []
+        perfil["familia"] = {}
+        perfil["preferencias"] = {}
+        perfil["resumen_contexto"] = ""
+        perfil["ultimo_tema"] = None
+        perfil["extras"] = {}
+        if guardar:
+            guardar(perfil)
+    _bridge_html(_burbuja('<p style="color:#ff6b6b;">🧠 Memoria personal y de sesión borrada.</p>'))
+    _bridge_scroll()
+    _hablar("He borrado la memoria personal y de sesión. Las notas no fueron modificadas.", chat_widget)
+
+
+# =============================================================================
+# 6. RUTINAS DE PRODUCTIVIDAD
+# =============================================================================
+
+_RUTINAS_NO_DESTRUCTIVAS = {
+    "abrir_app", "minimizar_app", "maximizar_app", "subir_volumen",
+    "bajar_volumen", "mute", "abrir_url", "modo",
+}
+
+
+def _rutina_acciones(params):
+    acciones = params.get("acciones", []) if isinstance(params, dict) else []
+    if isinstance(acciones, str):
+        try:
+            acciones = json.loads(acciones)
+        except json.JSONDecodeError:
+            acciones = []
+    if not isinstance(acciones, list) or not acciones or len(acciones) > 20:
+        return []
+    validas = []
+    for accion in acciones:
+        if not isinstance(accion, dict):
+            continue
+        nombre = str(accion.get("accion", "")).strip()
+        if nombre not in _RUTINAS_NO_DESTRUCTIVAS:
+            continue
+        validas.append({"accion": nombre, "params": accion.get("params", {}) or {}})
+    return validas
+
+
+def rutina_crear(nombre: str, acciones, chat_widget=None):
+    acciones_validas = _rutina_acciones({"acciones": acciones})
+    nombre = str(nombre or "").strip()[:80]
+    if not nombre or not acciones_validas:
+        _hablar("Necesito un nombre y al menos una acción segura para crear la rutina.", chat_widget)
+        return
+    ahora = datetime.now().isoformat(timespec="seconds")
+    with _get_conn() as conn:
+        conn.execute(
+            """INSERT INTO rutinas (nombre, acciones, creada) VALUES (?,?,?)
+               ON CONFLICT(nombre) DO UPDATE SET acciones=excluded.acciones,
+               activa=1, creada=excluded.creada""",
+            (nombre.lower(), json.dumps(acciones_validas, ensure_ascii=False), ahora),
+        )
+    _bridge_html(_burbuja(
+        f'<p style="color:#7ec8e3;font-weight:bold;">⚙ Rutina guardada: {escape(nombre)}</p>'
+        f'<p style="color:#8899bb;font-size:12px;">{len(acciones_validas)} acción(es) seguras</p>'
+    ))
+    _bridge_scroll()
+    _hablar(f"Rutina {nombre} guardada. Puedes previsualizarla antes de ejecutarla.", chat_widget)
+
+
+def _rutina_obtener(nombre: str):
+    with _get_conn() as conn:
+        row = conn.execute("SELECT * FROM rutinas WHERE lower(nombre) LIKE ?", (f"%{str(nombre).lower().strip()}%",)).fetchone()
+    if not row:
+        _hablar(f"No encontré la rutina {nombre}.", None)
+        return None
+    try:
+        acciones = json.loads(row["acciones"])
+    except (TypeError, json.JSONDecodeError):
+        acciones = []
+    return row, acciones
+
+
+def rutina_listar(chat_widget=None):
+    with _get_conn() as conn:
+        rows = conn.execute("SELECT * FROM rutinas ORDER BY nombre").fetchall()
+    if not rows:
+        _hablar("No tienes rutinas guardadas.", chat_widget)
+        return
+    filas = "".join(
+        f'<tr><td style="color:#7ec8e3;padding:4px 8px;">{escape(r["nombre"])}</td>'
+        f'<td style="color:#ccd6f6;padding:4px 8px;">{len(json.loads(r["acciones"]))} acciones</td>'
+        f'<td style="color:#a8e6cf;padding:4px 8px;">{"activa" if r["activa"] else "pausada"}</td>'
+        f'<td style="color:#8899bb;padding:4px 8px;">{r["proxima"] or "manual"}</td></tr>'
+        for r in rows
+    )
+    _bridge_html(_burbuja(f'<p style="color:#7ec8e3;font-weight:bold;">⚙ Rutinas</p><table>{filas}</table>'))
+    _bridge_scroll()
+    _hablar(f"Tienes {len(rows)} rutina(s).", chat_widget)
+
+
+def rutina_previsualizar(nombre: str, chat_widget=None):
+    resultado = _rutina_obtener(nombre)
+    if not resultado:
+        return
+    row, acciones = resultado
+    items = "".join(
+        f'<li style="color:#ccd6f6;">{escape(a["accion"])}: {escape(json.dumps(a["params"], ensure_ascii=False))}</li>'
+        for a in acciones
+    )
+    _bridge_html(_burbuja(
+        f'<p style="color:#ffd166;font-weight:bold;">👁 Vista previa: {escape(row["nombre"])}</p>'
+        f'<ol>{items}</ol><p style="color:#8899bb;font-size:12px;">Para ejecutar, di: ejecuta la rutina {escape(row["nombre"])}.</p>'
+    ))
+    _bridge_scroll()
+    _hablar(f"Vista previa de {row['nombre']}: {len(acciones)} acciones. Confirma cuando quieras ejecutarla.", chat_widget)
+
+
+def rutina_ejecutar(nombre: str, chat_widget=None):
+    resultado = _rutina_obtener(nombre)
+    if not resultado:
+        return
+    row, acciones = resultado
+    ejecutar = _ctx.get("ejecutar_accion")
+    if not ejecutar:
+        _hablar("El motor de acciones todavía no está disponible.", chat_widget)
+        return
+    for accion in acciones:
+        ejecutar(accion, chat_widget)
+        _registrar_rutina(row["id"], accion["accion"])
+    with _get_conn() as conn:
+        conn.execute("UPDATE rutinas SET ultima=? WHERE id=?", (datetime.now().isoformat(timespec="seconds"), row["id"]))
+    _hablar(f"Rutina {row['nombre']} ejecutada.", chat_widget)
+
+
+def rutina_programar(nombre: str, fecha_hora: str, chat_widget=None):
+    resultado = _rutina_obtener(nombre)
+    if not resultado:
+        return
+    dt = _parsear_fecha_hora(fecha_hora)
+    if not dt:
+        _hablar("Indica una hora válida, por ejemplo 18:30 o en 20 minutos.", chat_widget)
+        return
+    row, _ = resultado
+    with _get_conn() as conn:
+        conn.execute("UPDATE rutinas SET proxima=?, activa=1 WHERE id=?", (dt.isoformat(timespec="seconds"), row["id"]))
+    _hablar(f"Rutina {row['nombre']} programada para las {dt.strftime('%d/%m a las %H:%M')}.", chat_widget)
+
+
+def rutina_pausar(nombre: str, pausar: bool = True, chat_widget=None):
+    resultado = _rutina_obtener(nombre)
+    if not resultado:
+        return
+    row, _ = resultado
+    with _get_conn() as conn:
+        conn.execute("UPDATE rutinas SET activa=? WHERE id=?", (0 if pausar else 1, row["id"]))
+    estado = "pausada" if pausar else "reanudada"
+    _hablar(f"Rutina {row['nombre']} {estado}.", chat_widget)
+
+
+def rutina_historial(nombre: str, chat_widget=None):
+    resultado = _rutina_obtener(nombre)
+    if not resultado:
+        return
+    row, _ = resultado
+    with _get_conn() as conn:
+        rows = conn.execute(
+            "SELECT accion, ejecutada FROM rutinas_log WHERE rutina_id=? ORDER BY ejecutada DESC LIMIT 30",
+            (row["id"],),
+        ).fetchall()
+    if not rows:
+        _hablar(f"La rutina {row['nombre']} todavía no tiene ejecuciones registradas.", chat_widget)
+        return
+    items = "".join(f'<li style="color:#ccd6f6;">{escape(r["accion"])} — {r["ejecutada"]}</li>' for r in rows)
+    _bridge_html(_burbuja(f'<p style="color:#7ec8e3;font-weight:bold;">📋 Historial: {escape(row["nombre"])}</p><ul>{items}</ul>'))
+    _bridge_scroll()
+    _hablar(f"Hay {len(rows)} acciones registradas en {row['nombre']}.", chat_widget)
+
+
+def _revisar_rutinas():
+    ahora = datetime.now()
+    with _get_conn() as conn:
+        rows = conn.execute("SELECT * FROM rutinas WHERE activa=1 AND proxima IS NOT NULL").fetchall()
+    pendientes = []
+    for row in rows:
+        try:
+            if datetime.fromisoformat(row["proxima"]) <= ahora:
+                pendientes.append(row)
+        except Exception as exc:
+            print(f"[Rutina] Fecha inválida en {row['nombre']}: {exc}")
+
+    for row in pendientes:
+        try:
+            with _get_conn() as conn:
+                conn.execute("UPDATE rutinas SET proxima=NULL, ultima=? WHERE id=?", (ahora.isoformat(timespec="seconds"), row["id"]))
+            acciones = json.loads(row["acciones"])
+            ejecutar = _ctx.get("ejecutar_accion")
+            if ejecutar:
+                for accion in acciones:
+                    ejecutar(accion, None)
+                    _registrar_rutina(row["id"], accion["accion"])
+        except Exception as exc:
+            print(f"[Rutina] Error ejecutando {row['nombre']}: {exc}")
+
+
+def _registrar_rutina(rutina_id: int, accion: str):
+    with _get_conn() as conn:
+        conn.execute(
+            "INSERT INTO rutinas_log (rutina_id, accion, ejecutada) VALUES (?,?,?)",
+            (rutina_id, accion, datetime.now().isoformat(timespec="seconds")),
+        )
+
+
 # =============================================================================
 # FUNCIÓN PRINCIPAL DEL AGENTE
 # =============================================================================
@@ -941,6 +1562,10 @@ def ejecutar(accion: str, params: dict, chat_widget=None) -> bool:
             texto=p.get("texto", ""),
             fecha_hora_str=p.get("fecha_hora", ""),
             minutos=p.get("minutos"),
+            acompanamiento=p.get("acompanamiento", False),
+            categoria=p.get("categoria", ""),
+            max_intentos=p.get("max_intentos", 3),
+            intervalo_minutos=p.get("intervalo_minutos", 5),
             chat_widget=chat_widget,
         )
         return True
@@ -956,11 +1581,38 @@ def ejecutar(accion: str, params: dict, chat_widget=None) -> bool:
         )
         return True
 
+    if accion == "recordatorio_confirmar":
+        recordatorio_confirmar(
+            id_o_texto=str(p.get("id") or p.get("texto", "")),
+            chat_widget=chat_widget,
+        )
+        return True
+
+    if accion == "acompanamiento_resumen":
+        acompanamiento_resumen(chat_widget)
+        return True
+
+    if accion == "contacto_confianza_guardar":
+        contacto_confianza_guardar(
+            p.get("nombre", ""), p.get("destino", ""), p.get("canal", "correo"), chat_widget
+        )
+        return True
+
+    if accion == "contactos_confianza_listar":
+        contactos_confianza_listar(chat_widget)
+        return True
+
+    if accion == "contacto_confianza_eliminar":
+        contacto_confianza_eliminar(p.get("nombre", ""), chat_widget)
+        return True
+
     # ── Memoria de sesión ────────────────────────────────────────────────────
     if accion == "memoria_guardar":
         memoria_guardar(
             clave=p.get("clave", ""),
             valor=p.get("valor", ""),
+            categoria=p.get("categoria", "general"),
+            origen=p.get("origen", "usuario"),
             chat_widget=chat_widget,
         )
         return True
@@ -973,8 +1625,49 @@ def ejecutar(accion: str, params: dict, chat_widget=None) -> bool:
         memoria_resumir(chat_widget)
         return True
 
+    if accion == "memoria_buscar":
+        memoria_buscar(p.get("termino", ""), chat_widget)
+        return True
+
+    if accion == "memoria_olvidar":
+        memoria_olvidar(p.get("termino", ""), chat_widget)
+        return True
+
+    if accion == "memoria_exportar":
+        memoria_exportar(chat_widget)
+        return True
+
     if accion == "memoria_limpiar":
         memoria_limpiar(chat_widget)
+        return True
+
+    if accion == "memoria_borrar_todo":
+        memoria_borrar_todo(chat_widget)
+        return True
+
+    if accion == "rutina_crear":
+        rutina_crear(p.get("nombre", ""), p.get("acciones", []), chat_widget)
+        return True
+    if accion == "rutina_listar":
+        rutina_listar(chat_widget)
+        return True
+    if accion == "rutina_previsualizar":
+        rutina_previsualizar(p.get("nombre", ""), chat_widget)
+        return True
+    if accion == "rutina_ejecutar":
+        rutina_ejecutar(p.get("nombre", ""), chat_widget)
+        return True
+    if accion == "rutina_programar":
+        rutina_programar(p.get("nombre", ""), p.get("fecha_hora", ""), chat_widget)
+        return True
+    if accion == "rutina_pausar":
+        rutina_pausar(p.get("nombre", ""), True, chat_widget)
+        return True
+    if accion == "rutina_reanudar":
+        rutina_pausar(p.get("nombre", ""), False, chat_widget)
+        return True
+    if accion == "rutina_historial":
+        rutina_historial(p.get("nombre", ""), chat_widget)
         return True
 
     print(f"[agent_notas] Acción desconocida: '{accion}'")

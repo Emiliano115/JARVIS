@@ -47,12 +47,9 @@
 from __future__ import annotations
 
 import ctypes
-import json
 import os
 import re
-import subprocess
 import time
-import webbrowser
 
 import win32gui
 import win32con
@@ -813,7 +810,6 @@ def ejecutar(accion: str, params: dict, chat_widget=None) -> bool:
     # ── Archivos ──────────────────────────────────────────────────────────────
     if accion == "buscar_archivo":
         termino = p.get("termino", "").strip()
-        carpeta = p.get("carpeta")
         if not termino:
             _hablar("¿Qué archivo estás buscando?", chat_widget)
             return True

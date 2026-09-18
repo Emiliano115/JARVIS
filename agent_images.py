@@ -799,7 +799,10 @@ def ejecutar(accion: str, params: dict, chat_widget=None) -> bool:
         termino = params.get("termino", "").strip()
         if not termino:
             return False
-        max_i = int(params.get("max_imgs", 3))
+        try:
+            max_i = max(1, min(10, int(params.get("max_imgs", 3))))
+        except (TypeError, ValueError):
+            max_i = 3
 
         def _worker():
             urls = buscar_imagenes(termino, max_imgs=max_i)

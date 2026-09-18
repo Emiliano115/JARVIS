@@ -53,9 +53,10 @@ import re
 import threading
 import time
 import webbrowser
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
 from http.server import HTTPServer, BaseHTTPRequestHandler
+from html import escape
 from urllib.parse import urlparse, parse_qs
 
 import requests
@@ -90,6 +91,7 @@ def init(ctx: dict):
     """
     global _ctx
     _ctx = ctx
+    _arrancar_monitor_calendar()
 
 
 # =============================================================================
@@ -146,6 +148,9 @@ _svc_drive    = None
 
 _correo_pendiente = None
 _correo_lock = threading.Lock()
+_monitor_calendar_activo = False
+_avisos_calendar = set()
+_avisos_calendar_lock = threading.Lock()
 
 
 def _obtener_credenciales():
@@ -154,6 +159,14 @@ def _obtener_credenciales():
     if fn:
         return fn()
     return _flujo_oauth_propio()
+
+
+def _guardar_token_json(token_file: str, token_data: dict):
+    if not isinstance(token_data, dict):
+        raise ValueError("Token OAuth inválido")
+    os.makedirs(os.path.dirname(token_file) or ".", exist_ok=True)
+    with open(token_file, "w", encoding="utf-8") as f:
+        json.dump(token_data, f, indent=2, ensure_ascii=False)
 
 
 def _flujo_oauth_propio():
@@ -165,29 +178,23 @@ def _flujo_oauth_propio():
 
     base_path    = _ctx.get("base_path", os.getcwd())
     token_file   = os.path.join(base_path, "token.json")
-    scopes       = _ctx.get("SCOPES", [
-        "https://www.googleapis.com/auth/calendar",
-        "https://www.googleapis.com/auth/tasks",
-        "https://mail.google.com/",
-        "https://www.googleapis.com/auth/drive",
-        "https://www.googleapis.com/auth/contacts",
-    ])
     servidor_auth = _ctx.get("SERVIDOR_AUTH", "https://jarvis-server-j5ze.onrender.com")
 
     if os.path.exists(token_file):
         try:
-            # No reenviar SCOPES al refrescar: Google conserva los scopes del
-            # refresh token y puede rechazar una lista distinta con invalid_scope.
             creds = Credentials.from_authorized_user_file(token_file)
             if creds.valid:
                 return creds
             if creds.expired and creds.refresh_token:
                 creds.refresh(_GReq())
-                with open(token_file, "w") as f:
-                    f.write(creds.to_json())
+                _guardar_token_json(token_file, json.loads(creds.to_json()))
                 return creds
-        except Exception:
-            pass
+        except Exception as e:
+            print(f"[OAuth] Token inválido, reintentando: {e}")
+            try:
+                os.remove(token_file)
+            except Exception:
+                pass
 
     with _oauth_lock:
         if os.path.exists(token_file):
@@ -200,20 +207,25 @@ def _flujo_oauth_propio():
 
         _token_recibido = None
 
-        # Wake-up del servidor Render antes de abrir el navegador
         _bridge_html(_burbuja(
-            '<p style="color:#ffaa44;font-size:13px;">⏳ Despertando servidor OAuth...</p>'
+            '<p style="color:#ffaa44;font-size:13px;">⏳ Iniciando Google OAuth...</p>'
             '<p style="color:#8899bb;font-size:12px;">'
-            'El servidor puede tardar hasta 60s en responder la primera vez.<br>'
-            'El navegador abrirá automáticamente para que autorices el acceso.</p>'
+            'Si el navegador no abre, revisa que el servidor de auth esté activo.<br>'
+            'Jarvis espera a que Google devuelva el token para guardarlo como token.json.</p>'
         ))
         _bridge_scroll()
 
         try:
+            srv_ping = requests.get(f"{servidor_auth}/config", timeout=8, allow_redirects=False)
+            print(f"[OAuth] Ping servidor auth: {srv_ping.status_code}")
+        except Exception as e:
+            print(f"[OAuth] No se pudo contactar al servidor auth: {e}")
+
+        try:
             requests.get(f"{servidor_auth}/conectar", timeout=8, allow_redirects=False)
-        except Exception:
-            pass
-        time.sleep(3)  # dar tiempo al servidor para despertar completamente
+        except Exception as e:
+            print(f"[OAuth] Error al despertar /conectar: {e}")
+        time.sleep(3)
 
         class _Handler(BaseHTTPRequestHandler):
             def do_GET(self):
@@ -222,11 +234,16 @@ def _flujo_oauth_propio():
                 codigo = parse_qs(parsed.query).get("codigo", [None])[0]
                 if codigo:
                     try:
-                        r = requests.get(f"{servidor_auth}/obtener_token/{codigo}")
+                        r = requests.get(f"{servidor_auth}/obtener_token/{codigo}", timeout=20)
+                        print(f"[OAuth] obtener_token -> {r.status_code}")
                         if r.status_code == 200:
-                            _token_recibido = r.json()
+                            try:
+                                _token_recibido = r.json()
+                                print(f"[OAuth] Token recibido: {list(_token_recibido.keys())[:8]}")
+                            except Exception as e:
+                                print(f"[OAuth] JSON del token inválido: {e} | cuerpo={r.text[:250]}")
                     except Exception as e:
-                        print(f"[OAuth] {e}")
+                        print(f"[OAuth] Error al pedir token: {e}")
                 self.send_response(200)
                 self.end_headers()
                 try:
@@ -252,11 +269,14 @@ def _flujo_oauth_propio():
             time.sleep(0.5)
 
         if not _token_recibido:
-            print("[OAuth] No se recibió token.")
+            print("[OAuth] No se recibió token del servidor de auth.")
             return None
 
-        with open(token_file, "w") as f:
-            json.dump(_token_recibido, f)
+        try:
+            _guardar_token_json(token_file, _token_recibido)
+        except Exception as e:
+            print(f"[OAuth] Error guardando token.json: {e}")
+            return None
 
         return Credentials.from_authorized_user_file(token_file)
 
@@ -282,6 +302,91 @@ def _calendar():
     if _svc_calendar is None:
         _svc_calendar = _build("calendar", "v3")
     return _svc_calendar
+
+
+def _arrancar_monitor_calendar():
+    global _monitor_calendar_activo
+    if _monitor_calendar_activo:
+        return
+    _monitor_calendar_activo = True
+    threading.Thread(target=_loop_monitor_calendar, daemon=True, name="GoogleCalendarMonitor").start()
+
+
+def _loop_monitor_calendar():
+    """Avisa una vez cuando un evento de Calendar comienza en unos 15 minutos."""
+    while True:
+        time.sleep(30)
+        try:
+            if (_config().get("google_calendar", True)
+                    and _config().get("avisos_calendar_activados", True)):
+                calendar_revisar_avisos()
+        except Exception as exc:
+            print(f"[Calendar monitor] {type(exc).__name__}: {exc}")
+
+
+def calendar_revisar_avisos():
+    """Consulta eventos próximos y anuncia los que están a 15 minutos."""
+    token_file = os.path.join(_ctx.get("base_path", os.getcwd()), "token.json")
+    if not _token_reutilizable(token_file) and _svc_calendar is None:
+        return
+    svc = _calendar()
+    if not svc:
+        return
+    ahora = datetime.now(timezone.utc)
+    limite_inferior = ahora + timedelta(minutes=14)
+    limite_superior = ahora + timedelta(minutes=16)
+    try:
+        eventos = svc.events().list(
+            calendarId="primary",
+            singleEvents=True,
+            orderBy="startTime",
+            timeMin=limite_inferior.isoformat().replace("+00:00", "Z"),
+            timeMax=limite_superior.isoformat().replace("+00:00", "Z"),
+            maxResults=20,
+        ).execute().get("items", [])
+    except Exception as exc:
+        print(f"[Calendar avisos] No se pudo consultar: {type(exc).__name__}: {exc}")
+        return
+
+    for evento in eventos:
+        inicio = evento.get("start", {}).get("dateTime")
+        if not inicio:
+            continue
+        try:
+            inicio_dt = datetime.fromisoformat(inicio.replace("Z", "+00:00"))
+            if inicio_dt.tzinfo is None:
+                inicio_dt = inicio_dt.replace(tzinfo=timezone.utc)
+            minutos = (inicio_dt - ahora).total_seconds() / 60
+        except ValueError:
+            continue
+        if not 14 <= minutos <= 16:
+            continue
+        clave = f"{evento.get('id', '')}:{inicio}"
+        with _avisos_calendar_lock:
+            if clave in _avisos_calendar:
+                continue
+            _avisos_calendar.add(clave)
+        titulo = str(evento.get("summary") or "Evento sin título").strip()
+        hora = inicio_dt.astimezone().strftime("%H:%M")
+        mensaje = f"Aviso de Google Calendar: {titulo} comienza aproximadamente en 15 minutos, a las {hora}."
+        _bridge_html(_burbuja(
+            f'<p style="color:#ffd166;font-weight:bold;">📅 Evento próximo</p>'
+            f'<p style="color:#ccd6f6;">{escape(titulo)}</p>'
+            f'<p style="color:#8899bb;font-size:12px;">Comienza a las {hora}, en aproximadamente 15 minutos.</p>'
+        ))
+        _bridge_scroll()
+        _hablar(mensaje, None)
+
+
+def _token_reutilizable(token_file: str) -> bool:
+    if not os.path.exists(token_file):
+        return False
+    try:
+        from google.oauth2.credentials import Credentials
+        credenciales = Credentials.from_authorized_user_file(token_file)
+        return bool(credenciales.valid or credenciales.refresh_token)
+    except Exception:
+        return False
 
 
 def _tasks():
@@ -427,7 +532,7 @@ def gmail_buscar(consulta: str, chat_widget=None):
         _hablar("Error buscando en Gmail.", chat_widget)
 
 
-def gmail_enviar(destinatario: str, asunto: str, cuerpo: str, chat_widget=None):
+def gmail_enviar(destinatario: str, asunto: str, cuerpo: str, chat_widget=None, nombre_contacto: str = ""):
     """Prepara un correo y solicita confirmación antes de enviarlo."""
     global _correo_pendiente
     destinatario = str(destinatario or "").strip()
@@ -445,6 +550,7 @@ def gmail_enviar(destinatario: str, asunto: str, cuerpo: str, chat_widget=None):
             "destinatario": destinatario,
             "asunto": asunto,
             "cuerpo": cuerpo,
+            "nombre_contacto": nombre_contacto,
             "chat_widget": chat_widget,
         }
 
@@ -490,12 +596,13 @@ def resolver_correo_pendiente(comando: str, chat_widget=None) -> bool:
 
     _enviar_correo_confirmado(
         pendiente["destinatario"], pendiente["asunto"], pendiente["cuerpo"],
-        chat_widget or pendiente.get("chat_widget"),
+        chat_widget or pendiente.get("chat_widget"), pendiente.get("nombre_contacto", ""),
     )
     return True
 
 
-def _enviar_correo_confirmado(destinatario: str, asunto: str, cuerpo: str, chat_widget=None):
+def _enviar_correo_confirmado(destinatario: str, asunto: str, cuerpo: str,
+                              chat_widget=None, nombre_contacto: str = ""):
     """Realiza la llamada Gmail únicamente después de confirmar."""
     _hablar(f"Enviando correo a {destinatario}...", chat_widget)
     svc = _gmail()
@@ -508,6 +615,12 @@ def _enviar_correo_confirmado(destinatario: str, asunto: str, cuerpo: str, chat_
         msg["subject"]= asunto
         raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
         svc.users().messages().send(userId="me", body={"raw": raw}).execute()
+        guardar_contacto = _ctx.get("guardar_contacto_confianza")
+        if guardar_contacto:
+            try:
+                guardar_contacto(destinatario, nombre_contacto)
+            except Exception as exc:
+                print(f"[Gmail] No se pudo guardar el correo del contacto: {exc}")
         _hablar(f"Correo enviado a {destinatario}.", chat_widget)
         html = (
             f'<b>📧 Correo enviado</b><br>'
@@ -567,6 +680,8 @@ def _extraer_nombre_fecha_hora(texto: str, tipo: str = "evento"):
             if mes_num:
                 year = datetime.now().year
                 fecha = datetime(year, mes_num, int(m2.group(1)))
+                if fecha.date() < datetime.now().date():
+                    fecha = fecha.replace(year=year + 1)
         elif "mañana" in texto:
             fecha = datetime.now() + timedelta(days=1)
 
@@ -611,6 +726,12 @@ def calendar_ver_eventos(chat_widget=None):
         ).execute()
         eventos = res.get("items", [])
         if not eventos:
+            html = (
+                '<b>📅 Próximos eventos (0)</b>'
+                '<br><span style="color:#8899bb;font-size:12px;">No tienes eventos próximos.</span>'
+            )
+            _bridge_html(_burbuja(html))
+            _bridge_scroll()
             _hablar("No tienes eventos próximos.", chat_widget)
             return
 
@@ -668,7 +789,7 @@ def calendar_crear_evento(comando: str, chat_widget=None):
     start = fecha.isoformat()
     end   = (fecha + timedelta(hours=1)).isoformat()
     try:
-        evento = svc.events().insert(
+        svc.events().insert(
             calendarId="primary",
             body={
                 "summary": nombre,
@@ -1048,6 +1169,7 @@ def ejecutar(accion: str, params: dict, chat_widget=None) -> bool:
             p.get("asunto", "(sin asunto)"),
             p.get("cuerpo", ""),
             chat_widget,
+            p.get("nombre_contacto", ""),
         )
         return True
 

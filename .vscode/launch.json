@@ -1,0 +1,37 @@
+{
+  "version": "0.2.0",
+  "configurations": [
+    {
+      "name": "Run Jarvis (gestos)",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/Jarvis_main.py",
+      "console": "integratedTerminal",
+      "args": ["--gestos"],
+      "env": {
+        "JARVIS_AUTO_GESTOS": "1"
+      },
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Run Jarvis (calibrar+gestos)",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/Jarvis_main.py",
+      "console": "integratedTerminal",
+      "args": ["--calibrar-gestos", "--gestos"],
+      "env": {
+        "JARVIS_AUTO_GESTOS": "1"
+      },
+      "cwd": "${workspaceFolder}"
+    },
+    {
+      "name": "Run start_gestos.py",
+      "type": "python",
+      "request": "launch",
+      "program": "${workspaceFolder}/start_gestos.py",
+      "console": "integratedTerminal",
+      "cwd": "${workspaceFolder}"
+    }
+  ]
+}

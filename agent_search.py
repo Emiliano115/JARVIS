@@ -36,10 +36,8 @@ import html
 import json
 import os
 import re
-import threading
 import time
 import webbrowser
-from datetime import datetime
 from urllib.parse import quote as _url_quote, urlparse
 
 import requests
@@ -697,7 +695,6 @@ def buscar_web(pregunta: str, termino_imagen: str = None, chat_widget=None) -> b
     import urllib.request as _ur
     import urllib.error   as _ue
 
-    pregunta_lc = pregunta.lower()
     _keywords_lugares = [
         "restaurante", "restaurantes", "donde comer", "dónde comer",
         "donde ir", "dónde ir", "lugares para", "sitios en",
@@ -901,6 +898,166 @@ def _buscar_con_groq(pregunta: str, chat_widget=None) -> bool:
     return False
 
 
+def _normalizar_idioma_traduccion(idioma: str) -> str:
+    """Convierte nombres de idioma a códigos ISO reconocibles por el modelo."""
+    texto = str(idioma or "inglés").strip().lower()
+    if not texto:
+        return "en"
+    if re.fullmatch(r"[a-z]{2,3}", texto):
+        return texto
+
+    mapa = {
+        "inglés": "en", "english": "en", "ingles": "en",
+        "español": "es", "spanish": "es", "espanol": "es",
+        "francés": "fr", "frances": "fr", "french": "fr", "francais": "fr",
+        "alemán": "de", "aleman": "de", "german": "de",
+        "italiano": "it", "italian": "it",
+        "portugués": "pt", "portugues": "pt", "portuguese": "pt",
+        "ruso": "ru", "russian": "ru",
+        "turco": "tr", "turko": "tr", "turkish": "tr",
+        "japonés": "ja", "japones": "ja", "japanese": "ja",
+        "coreano": "ko", "korean": "ko",
+        "chino": "zh", "mandarín": "zh", "mandarin": "zh",
+        "árabe": "ar", "arabe": "ar", "arabic": "ar",
+        "holandés": "nl", "holandes": "nl", "dutch": "nl",
+        "sueco": "sv", "suéco": "sv", "swedish": "sv",
+        "polaco": "pl", "polish": "pl",
+        "hindi": "hi", "indio": "hi",
+        "noruego": "no", "danés": "da", "danish": "da", "dano": "da",
+        "finés": "fi", "fines": "fi", "finnish": "fi",
+        "griego": "el", "greek": "el",
+        "ucraniano": "uk", "ukrainian": "uk",
+        "vietnamita": "vi", "vietnamese": "vi",
+        "tailandés": "th", "tailandes": "th",
+        "indonesio": "id", "indonesian": "id",
+        "hebreo": "he", "hebrew": "he",
+    }
+    return mapa.get(texto, "en")
+
+
+def _traducir_con_google(texto: str, idioma_destino: str) -> str:
+    """Fallback determinista usando el endpoint público de Google Translate."""
+    if not texto or not idioma_destino:
+        return ""
+    try:
+        encoded = _url_quote(texto)
+        url = (
+            "https://translate.googleapis.com/translate_a/single"
+            f"?client=gtx&sl=auto&tl={idioma_destino}&dt=t&q={encoded}"
+        )
+        resp = requests.get(url, timeout=20)
+        if resp.status_code != 200:
+            print(f"[Google Translate] HTTP {resp.status_code}")
+            return ""
+        data = resp.json()
+        if not isinstance(data, list) or len(data) < 2 or not isinstance(data[0], list):
+            return ""
+        partes = []
+        for item in data[0]:
+            if isinstance(item, list) and item and isinstance(item[0], str):
+                partes.append(item[0])
+        return "".join(partes).strip()
+    except Exception as exc:
+        print(f"[Google Translate] Error: {exc}")
+        return ""
+
+
+def traducir_texto(texto: str, idioma_destino: str = "inglés", idioma_origen: str = "", chat_widget=None) -> bool:
+    """Traduce texto mediante NVIDIA si funciona; si no, usa Google Translate como fallback fiable."""
+    texto = str(texto or "").strip()
+    destino_label = str(idioma_destino or "inglés").strip() or "inglés"
+    destino = _normalizar_idioma_traduccion(destino_label)
+    origen = str(idioma_origen or "").strip()
+    origen_label = origen if origen else "auto-detect"
+    if not texto:
+        _hablar("Necesito el texto que quieres traducir.", chat_widget)
+        return False
+
+    keys_fn = _ctx.get("nvidia_keys")
+    key_fn = _ctx.get("nvidia_key_activa")
+    rotate_fn = _ctx.get("nvidia_rotar_key")
+    keys = keys_fn() if callable(keys_fn) else []
+    key = key_fn() if callable(key_fn) else ""
+
+    instrucciones = (
+        f"Traduce el siguiente texto del idioma {origen_label} al idioma {destino_label} ({destino}). "
+        f"Conserva el significado, el tono y el formato. Devuelve únicamente la traducción, sin explicaciones."
+    )
+    if origen:
+        instrucciones += f" El idioma de origen es {origen}."
+
+    if keys and key:
+        modelos = [
+            _ctx.get("NVIDIA_MODELO_TRADUCCION", "nvidia/riva-translate-4b-instruct-v2"),
+            "openai/gpt-oss-20b",
+            "z-ai/glm-5.3-flash",
+            "mistralai/mistral-nemotron",
+        ]
+        base_url = _ctx.get("NVIDIA_BASE_URL", "https://integrate.api.nvidia.com/v1/chat/completions")
+
+        for modelo_actual in dict.fromkeys(modelos):
+            payload = {
+                "model": modelo_actual,
+                "messages": [
+                    {"role": "system", "content": instrucciones},
+                    {"role": "user", "content": texto[:12000]},
+                ],
+                "temperature": 0.1,
+                "max_tokens": 2000,
+            }
+            if modelo_actual != _ctx.get("NVIDIA_MODELO_TRADUCCION", "nvidia/riva-translate-4b-instruct-v2"):
+                payload["messages"] = [
+                    {"role": "user", "content": f"Translate exactly this text from {origen_label} to {destino_label}. Return only the translated text and nothing else.\n\nTexto: {texto[:12000]}"}
+                ]
+            try:
+                respuesta = requests.post(
+                    base_url,
+                    json=payload,
+                    headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                    timeout=30,
+                )
+                if respuesta.status_code in (401, 403, 429):
+                    if callable(rotate_fn):
+                        rotate_fn(f"traduccion {respuesta.status_code}")
+                    if modelo_actual == modelos[-1]:
+                        break
+                    continue
+                if respuesta.status_code != 200:
+                    print(f"[NVIDIA Translation] HTTP {respuesta.status_code}: {respuesta.text[:300]}")
+                    if modelo_actual == modelos[-1]:
+                        break
+                    continue
+                traduccion = respuesta.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                if not traduccion:
+                    if modelo_actual == modelos[-1]:
+                        break
+                    continue
+                if destino != "en" and traduccion.lower().strip() == texto.lower().strip():
+                    if modelo_actual != modelos[-1]:
+                        continue
+                html_resultado = "<p><b>Traducción:</b></p><p>" + html.escape(traduccion).replace("\n", "<br>") + "</p>"
+                _bridge_html(_burbuja_jarvis(html_resultado))
+                _bridge_scroll()
+                _cola_voz().put(_limpiar(traduccion)[:800])
+                return True
+            except requests.RequestException as exc:
+                print(f"[NVIDIA Translation] Error de red: {exc}")
+                if modelo_actual == modelos[-1]:
+                    break
+                continue
+
+    traduccion_google = _traducir_con_google(texto, destino)
+    if traduccion_google:
+        html_resultado = "<p><b>Traducción:</b></p><p>" + html.escape(traduccion_google).replace("\n", "<br>") + "</p>"
+        _bridge_html(_burbuja_jarvis(html_resultado))
+        _bridge_scroll()
+        _cola_voz().put(_limpiar(traduccion_google)[:800])
+        return True
+
+    _hablar("No pude traducir el texto en este momento.", chat_widget)
+    return False
+
+
 # =============================================================================
 # FUNCIÓN PRINCIPAL DEL AGENTE
 # =============================================================================
@@ -911,6 +1068,7 @@ def ejecutar(accion: str, params: dict, chat_widget=None) -> bool:
 
     Acciones soportadas:
       buscar_web  → params: {pregunta, termino_imagen?}
+            traducir    → params: {texto, idioma_destino?, idioma_origen?}
       noticias    → params: {tema?, categoria?}
       clima       → params: {ciudad?}
       calcular    → params: {expresion}
@@ -935,6 +1093,13 @@ def ejecutar(accion: str, params: dict, chat_widget=None) -> bool:
         return True
     if accion == "calcular":
         return calcular_expresion(params.get("expresion", ""), chat_widget)
+    if accion == "traducir":
+        return traducir_texto(
+            params.get("texto", ""),
+            params.get("idioma_destino", "inglés"),
+            params.get("idioma_origen", ""),
+            chat_widget,
+        )
 
     print(f"[agent_search] Acción desconocida: '{accion}'")
     return False

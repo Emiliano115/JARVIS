@@ -7,6 +7,7 @@ pywin32>=306,<312
 keyboard>=0.13,<1
 pyttsx3>=2.98,<3
 pygame>=2.6,<3
+edge-tts>=7,<8
 word2number-es>=1.0,<2
 thefuzz>=0.22,<1
 python-Levenshtein>=0.25,<1

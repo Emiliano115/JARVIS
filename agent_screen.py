@@ -7,6 +7,7 @@ import os
 import re
 import threading
 import time
+import urllib.request
 
 try:
     from PIL import ImageGrab
@@ -120,6 +121,35 @@ _GESTOS_ACTION_DEBOUNCE = 0.22
 # Verbose logging for calibration/debugging
 _GESTOS_VERBOSE_LOG = False
 _GESTOS_LOG_PATH = "gestos_detailed_log.txt"
+_GESTOS_MODEL_URL = "https://storage.googleapis.com/mediapipe-models/hand_landmarker/hand_landmarker/float16/1/hand_landmarker.task"
+
+
+def _obtener_modelo_gestos() -> str | None:
+    """Busca o descarga una vez el modelo requerido por MediaPipe Tasks."""
+    base_dir = os.path.abspath(_ctx.get("base_path") or os.getcwd())
+    model_dir = os.path.join(base_dir, "models")
+    model_path = os.path.join(model_dir, "hand_landmarker.task")
+    if os.path.isfile(model_path) and os.path.getsize(model_path) > 100000:
+        return model_path
+    try:
+        os.makedirs(model_dir, exist_ok=True)
+        tmp_path = model_path + ".download"
+        print("[Screen] Descargando modelo hand_landmarker para activar gestos...")
+        urllib.request.urlretrieve(_GESTOS_MODEL_URL, tmp_path)
+        if os.path.getsize(tmp_path) <= 100000:
+            os.remove(tmp_path)
+            return None
+        os.replace(tmp_path, model_path)
+        print(f"[Screen] Modelo de gestos guardado en {model_path}")
+        return model_path
+    except Exception as exc:
+        print(f"[Screen] No pude descargar el modelo de gestos: {exc}")
+        try:
+            if os.path.exists(tmp_path):
+                os.remove(tmp_path)
+        except Exception:
+            pass
+        return None
 
 
 def _gestos_log(*parts):
@@ -217,7 +247,6 @@ def leer_texto_pantalla(imagen=None, max_caracteres=None, max_lineas=None) -> st
         })
         linea["palabras"].append(palabra)
 
-    lineas = []
     vistos = set()
     bloques_visual = {}
     for (numero_bloque, numero_parrafo, _), linea in bloques.items():
@@ -456,8 +485,10 @@ def hacer_zoom(cantidad: int = 120, chat_widget=None):
         return
     try:
         pyautogui.keyDown('ctrl')
-        pyautogui.scroll(int(cantidad))
-        pyautogui.keyUp('ctrl')
+        try:
+            pyautogui.scroll(int(cantidad))
+        finally:
+            pyautogui.keyUp('ctrl')
         _notify(f"Zoom ejecutado: {int(cantidad)}")
     except Exception as exc:
         print(f"[Screen] Zoom falló: {exc}")
@@ -571,7 +602,7 @@ def _manejar_gestos_por_camara(chat_widget=None):
         if _gestos_thread is None or not _gestos_thread.is_alive():
             _gestos_thread = threading.Thread(target=_hilo_gestos, daemon=True, name="JarvisGestos")
             _gestos_thread.start()
-        _notify("Modo de gestos activado")
+        _notify("Cámara de gestos preparada")
         return True
 
 
@@ -596,7 +627,7 @@ def _hilo_gestos():
                 from mediapipe.tasks.python.core.base_options import BaseOptions
                 from mediapipe.tasks.python.vision.core import image as image_lib
                 # Attempt to find a local model asset
-                model_path = None
+                model_path = _obtener_modelo_gestos()
                 try:
                     import os, glob
                     script_dir = os.path.abspath(os.path.dirname(__file__))
@@ -613,7 +644,7 @@ def _hilo_gestos():
                             continue
                         candidates += glob.glob(os.path.join(base_dir, '**', 'hand_landmarker*.task'), recursive=True)
                         candidates += glob.glob(os.path.join(base_dir, '**', 'hand_landmarker*.tflite'), recursive=True)
-                    if candidates:
+                    if model_path is None and candidates:
                         model_path = os.path.abspath(candidates[0])
                 except Exception:
                     model_path = None
@@ -643,7 +674,10 @@ def _hilo_gestos():
     if hand_detector is None:
         print("[Screen] No hay backend de detección de manos disponible.")
         _modo_gestos_activo = False
+        _say("No pude iniciar la detección de manos. Revisa el modelo de MediaPipe y la cámara.", None)
         return
+
+    _say("Modo de gestos activado con cámara y detección de mano.", None)
 
     while _modo_gestos_activo:
         if _cam_gestos is None or not _cam_gestos.isOpened():
@@ -983,7 +1017,6 @@ def calibrar_gestos(duracion: int = 6, chat_widget=None):
             try:
                 rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
                 # try solutions or tasks lightweight detection
-                pts = []
                 if hasattr(mp, 'solutions') and hasattr(mp.solutions, 'hands'):
                     with mp.solutions.hands.Hands(static_image_mode=False, max_num_hands=1) as hd:
                         res = hd.process(rgb)
@@ -1044,7 +1077,7 @@ def activar_modo_gestos(chat_widget=None):
         # _manejar_gestos_por_camara already explica la causa.
         return False
     _toggle_clap_listener()
-    _say("Modo de gestos activado con cámara y control por mano.", chat_widget)
+    _say("Estoy iniciando el modo de gestos; te avisaré cuando la cámara y la detección estén listas.", chat_widget)
     return True
 
 

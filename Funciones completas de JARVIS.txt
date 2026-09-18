@@ -1,0 +1,360 @@
+## 1) Sistema y control del PC
+
+Estas acciones controlan la máquina y sus programas:
+- abrir_app
+- cerrar_app
+- minimizar_app
+- maximizar_app
+- poner_volumen
+- subir_volumen
+- bajar_volumen
+- mute
+- subir_brillo
+- bajar_brillo
+- poner_brillo
+- apagar
+- reiniciar
+- bloquear
+- suspender
+- hibernar
+- modo
+- buscar_archivo
+- aprender_app
+
+### Qué hace cada una
+- abrir_app: abre una aplicación
+- cerrar_app: cierra una app
+- minimizar_app: minimiza una ventana
+- maximizar_app: maximiza una ventana
+- poner_volumen: ajusta volumen al valor indicado
+- subir_volumen: sube volumen
+- bajar_volumen: baja volumen
+- mute: silencia
+- subir_brillo: sube brillo
+- bajar_brillo: baja brillo
+- poner_brillo: fija brillo
+- apagar: apaga PC
+- reiniciar: reinicia PC
+- bloquear: bloquea sesión
+- suspender: suspende el equipo
+- hibernar: hiberna el equipo
+- modo: activa un modo predefinido
+- buscar_archivo: busca un fichero o carpeta
+- aprender_app: aprende una aplicación para reconocerla mejor después
+
+### Requiere
+- Windows
+- permisos de sistema
+- apps instaladas
+- interacción con archivos locales
+
+### Ejemplos
+- “abre Spotify”
+- “sube el volumen”
+- “baja el brillo”
+- “reinicia el equipo”
+- “modo estudio”
+
+---
+
+## 2) Pantalla, ratón, teclado y gestos
+
+Estas acciones manejan la interacción con lo que vemos:
+- ver_pantalla
+- analizar_pantalla
+- leer_pantalla
+- activar_gestos
+- desactivar_gestos
+- calibrar_gestos
+- recalibrar_gestos
+- hacer_click
+- escribir
+- pulsar_tecla
+- desplazarse
+- hacer_zoom
+
+### Qué hace cada una
+- ver_pantalla: visualiza la pantalla
+- analizar_pantalla: interpreta el contenido visible
+- leer_pantalla: extrae texto de la pantalla
+- activar_gestos: activa control por gestos
+- desactivar_gestos: desactiva control por gestos
+- calibrar_gestos: calibra gestos
+- recalibrar_gestos: vuelve a calibrar
+- hacer_click: hace click
+- escribir: escribe un texto
+- pulsar_tecla: pulsa tecla o combinación
+- desplazarse: mueve el cursor o el scroll
+- hacer_zoom: hace zoom
+
+### Requiere
+- permisos de pantalla
+- permisos de teclado/ratón
+- en algunos casos, cámara o OCR
+
+### Ejemplos
+- “mira la pantalla”
+- “activa los gestos”
+- “haz click allí”
+- “escribe hola”
+- “pulsa Enter”
+
+---
+
+## 3) Búsqueda, mapas, cálculo y traducción
+
+Estas son acciones de información y navegación:
+- buscar_web
+- noticias
+- clima
+- calcular
+- traducir
+- mostrar_mapa
+- abrir_url
+
+### Qué hace cada una
+- buscar_web: busca información en la web
+- noticias: consulta noticias
+- clima: obtiene clima
+- calcular: realiza cálculos
+- traducir: traduce texto
+- mostrar_mapa: muestra un lugar en mapa
+- abrir_url: abre una dirección web
+
+### Requiere
+- internet
+- APIs o servicios externos
+- navegador o mapa
+
+### Ejemplos
+- “busca información sobre IA”
+- “qué tiempo hace”
+- “traduce esto”
+- “muestra Bogotá en el mapa”
+- “abre una URL”
+
+---
+
+## 4) Imágenes
+
+- buscar_imagen
+- generar_imagen
+
+### Qué hace cada una
+- buscar_imagen: busca imágenes
+- generar_imagen: crea una imagen con texto o prompt
+
+### Requiere
+- acceso a servicios de imagen
+- clave o configuración activa
+
+### Ejemplos
+- “busca una imagen de un gato”
+- “genera una imagen de una ciudad futurista”
+
+---
+
+## 5) Google y servicios de Google
+
+Estas son las acciones de integración con Gmail, calendario, tareas y Drive:
+- gmail_leer
+- gmail_buscar
+- gmail_enviar
+- gmail_eliminar
+- ver_eventos
+- crear_evento
+- editar_evento
+- eliminar_evento
+- ver_tareas
+- crear_tarea
+- editar_tarea
+- eliminar_tarea
+- buscar_contacto
+- drive_buscar
+
+### Alias legacy
+- mostrar_eventos
+- mostrar_agenda
+- mostrar_tareas
+
+### Qué hace cada una
+- gmail_leer: lee correo
+- gmail_buscar: busca correo
+- gmail_enviar: envía correo
+- gmail_eliminar: elimina correo
+- ver_eventos: ve la agenda
+- crear_evento: crea evento
+- editar_evento: modifica evento
+- eliminar_evento: elimina evento
+- ver_tareas: muestra tareas
+- crear_tarea: crea tarea
+- editar_tarea: cambia tarea
+- eliminar_tarea: elimina tarea
+- buscar_contacto: busca contacto
+- drive_buscar: busca en Drive
+
+### Requiere
+- Google API
+- OAuth
+- extensiones activadas
+- credenciales válidas
+
+### Ejemplos
+- “abre mi correo”
+- “crea un evento mañana”
+- “muestra mis tareas”
+- “busca en Drive el documento X”
+
+---
+
+## 6) Notas, alarmas, recordatorios y organización
+
+- nota_crear
+- nota_leer
+- nota_buscar
+- nota_editar
+- nota_eliminar
+- alarma_crear
+- alarma_listar
+- alarma_eliminar
+- recordatorio_crear
+- recordatorio_listar
+- recordatorio_eliminar
+- recordatorio_confirmar
+- acompanamiento_resumen
+- contacto_confianza_guardar
+- contactos_confianza_listar
+- contacto_confianza_eliminar
+- enviar_aviso_contacto
+
+### Qué hace cada una
+- nota_crear: crea una nota
+- nota_leer: lee una nota
+- nota_buscar: busca notas
+- nota_editar: edita una nota
+- nota_eliminar: borra una nota
+- alarma_crear: crea una alarma
+- alarma_listar: lista alarmas
+- alarma_eliminar: borra una alarma
+- recordatorio_crear: crea un recordatorio
+- recordatorio_listar: lista recordatorios
+- recordatorio_eliminar: elimina recordatorio
+- recordatorio_confirmar: confirma recordatorio
+- acompanamiento_resumen: resume seguimientos
+- contacto_confianza_guardar: guarda un contacto de confianza
+- contactos_confianza_listar: lista contactos de confianza
+- contacto_confianza_eliminar: elimina contacto
+- enviar_aviso_contacto: envía aviso por correo a un contacto
+
+### Requiere
+- base de datos local
+- correo asociado en algunos casos
+
+### Ejemplos
+- “crea una nota llamada ideas”
+- “pon una alarma en 10 minutos”
+- “hazme un recordatorio de llamar a mamá”
+- “guarda a Juan como contacto de confianza”
+
+---
+
+## 7) Memoria y rutinas
+
+- memoria_guardar
+- memoria_leer
+- memoria_resumir
+- memoria_buscar
+- memoria_olvidar
+- memoria_exportar
+- memoria_limpiar
+- memoria_borrar_todo
+- rutina_crear
+- rutina_listar
+- rutina_previsualizar
+- rutina_ejecutar
+- rutina_programar
+- rutina_pausar
+- rutina_reanudar
+- rutina_historial
+
+### Qué hace cada una
+- memoria_guardar: guarda información del usuario
+- memoria_leer: lee la memoria
+- memoria_resumir: resume la memoria
+- memoria_buscar: busca un dato en memoria
+- memoria_olvidar: borra un dato concreto
+- memoria_exportar: exporta la memoria
+- memoria_limpiar: limpia la memoria
+- memoria_borrar_todo: borra toda la memoria
+- rutina_crear: crea una rutina
+- rutina_listar: ve rutinas
+- rutina_previsualizar: muestra la composición de la rutina
+- rutina_ejecutar: ejecuta rutina
+- rutina_programar: programa rutina
+- rutina_pausar: pausa rutina
+- rutina_reanudar: reanuda rutina
+- rutina_historial: ve el historial de rutinas
+
+### Requiere
+- almacenamiento local
+- configuración de usuario
+
+### Ejemplos
+- “guarda en memoria que me gusta el café”
+- “muestra mi memoria”
+- “crea una rutina de trabajo”
+- “ejecuta la rutina de estudio”
+
+---
+
+## 8) Acciones generales del asistente
+
+- responder
+- iniciar_escucha_microfono
+
+### Qué hace cada una
+- responder: responde con texto o HTML
+- iniciar_escucha_microfono: activa escucha del micrófono
+
+### Requiere
+- micrófono
+- permisos activos
+- entrada del usuario
+
+---
+
+## 9) Lo más importante: resumen corto
+
+Jarvis puede:
+- conversar
+- abrir apps
+- controlar volumen y brillo
+- controlar teclado y pantalla
+- buscar en la web
+- dar clima, noticias y cálculo
+- traducir
+- buscar y generar imágenes
+- usar Gmail, Google Calendar, tareas, contactos y Drive
+- crear notas y recordatorios
+- gestionar memoria y rutinas
+- automatizar secuencias
+
+---
+
+## 10) Estado real de funcionamiento
+
+### Lo que sí está verificado
+- pruebas unitarias del proyecto: OK
+- análisis de código principal: OK
+- sintaxis del proyecto: OK
+
+### Lo que depende de entorno externo
+- micrófono
+- pantalla
+- teclado
+- Google OAuth
+- APIs web
+- Windows
+- permisos del sistema
+
+---

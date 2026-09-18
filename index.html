@@ -1,0 +1,1495 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Proyecto STEAM+T - Emiliano Cómbita Ramírez</title>
+    <style>
+        :root {
+            --bg-main: #f8fafc;
+            --bg-container: #ffffff;
+            --red-formal: #7f1d1d; /* Rojo Vino / Borgoña Académico */
+            --red-dark: #450a0a;
+            --red-hover: #991b1b;
+            --red-light: #fdf2f2;
+            --text-main: #1e293b;
+            --text-muted: #475569;
+            --border-color: #e2e8f0;
+            --shadow-subtle: 0 4px 20px -2px rgba(0, 0, 0, 0.05), 0 2px 8px -1px rgba(0, 0, 0, 0.02);
+            --shadow-card: 0 10px 25px -5px rgba(0, 0, 0, 0.05), 0 4px 12px -2px rgba(0, 0, 0, 0.03);
+            --shadow-hover: 0 20px 25px -5px rgba(127, 29, 29, 0.08), 0 8px 10px -6px rgba(127, 29, 29, 0.05);
+        }
+
+        * {
+            box-sizing: border-box;
+            margin: 0;
+            padding: 0;
+            transition: background-color 0.25s ease, transform 0.25s ease, box-shadow 0.25s ease, border-color 0.25s ease;
+        }
+
+        body {
+            font-family: 'Georgia', 'Times New Roman', Times, serif;
+            background-color: var(--bg-main);
+            color: var(--text-main);
+            line-height: 1.75;
+            padding-bottom: 2.5rem;
+        }
+
+        /* Encabezado Institucional */
+        .academic-header {
+            background-color: var(--bg-container);
+            border-bottom: 3px double var(--red-formal);
+            padding: 3rem 2rem;
+            text-align: center;
+            max-width: 1200px;
+            margin: 2rem auto;
+            border-radius: 6px;
+            box-shadow: var(--shadow-subtle);
+        }
+
+        .academic-header h1 {
+            color: var(--red-formal);
+            font-size: 2.6rem;
+            font-weight: normal;
+            letter-spacing: 1px;
+            margin-bottom: 0.75rem;
+            text-transform: uppercase;
+        }
+
+        .academic-meta {
+            font-family: 'Arial', sans-serif;
+            font-size: 0.9rem;
+            color: var(--text-muted);
+            display: flex;
+            justify-content: center;
+            gap: 2.5rem;
+            flex-wrap: wrap;
+            margin-top: 1.5rem;
+        }
+
+        .academic-meta span strong {
+            color: var(--text-main);
+        }
+
+        /* Sistema de Navegación */
+        .navigation-bar {
+            max-width: 1200px;
+            margin: 0 auto 2rem auto;
+            display: grid;
+            grid-template-columns: repeat(8, 1fr);
+            gap: 0.5rem;
+            padding: 0 1rem;
+            font-family: 'Arial', sans-serif;
+        }
+
+        .nav-button {
+            background-color: var(--bg-container);
+            border: 1px solid var(--border-color);
+            border-bottom: 3px solid var(--border-color);
+            padding: 1.2rem 0.5rem;
+            text-align: center;
+            font-size: 0.85rem;
+            font-weight: bold;
+            color: var(--text-muted);
+            cursor: pointer;
+            border-radius: 6px 6px 0 0;
+            box-shadow: var(--shadow-subtle);
+        }
+
+        .nav-button:hover {
+            color: var(--red-formal);
+            border-bottom-color: var(--red-hover);
+            background-color: var(--red-light);
+            transform: translateY(-3px);
+            box-shadow: var(--shadow-card);
+        }
+
+        .nav-button.active-page {
+            background-color: var(--red-formal);
+            color: #ffffff;
+            border-color: var(--red-formal);
+            border-bottom: 3px solid var(--red-dark);
+            box-shadow: var(--shadow-card);
+        }
+
+        /* Contenedor de Contenidos */
+        .page-wrapper {
+            max-width: 1200px;
+            margin: 0 auto;
+            padding: 0 1rem;
+        }
+
+        .document-page {
+            display: none;
+            background-color: var(--bg-container);
+            border: 1px solid var(--border-color);
+            padding: 4.5rem 4rem;
+            border-radius: 6px;
+            box-shadow: var(--shadow-card);
+            animation: pageFadeIn 0.45s cubic-bezier(0.16, 1, 0.3, 1) forwards;
+        }
+
+        .document-page.active-page {
+            display: block;
+        }
+
+        @keyframes pageFadeIn {
+            from { opacity: 0; transform: translateY(12px); }
+            to { opacity: 1; transform: translateY(0); }
+        }
+
+        /* Tipografía Interna y Solución del Desplazamiento (Textos Corridos) */
+        h2 {
+            color: var(--red-formal);
+            font-size: 2rem;
+            font-weight: normal;
+            border-bottom: 2px solid var(--red-formal);
+            padding-bottom: 0.75rem;
+            margin-bottom: 2.5rem;
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+        }
+
+        h3 {
+            color: var(--red-dark);
+            font-size: 1.4rem;
+            font-weight: bold;
+            margin: 3rem 0 1.25rem 0;
+            font-family: 'Arial', sans-serif;
+        }
+
+        p {
+            margin-bottom: 1.75rem;
+            text-align: justify;
+        }
+
+        /* Aplicar sangría únicamente a párrafos normales dentro de la página para evitar descuadres en tarjetas */
+        .document-page > p {
+            text-indent: 0;
+        }
+
+        /* Eliminar explícitamente sangrías accidentales en contenedores estructurados */
+        .no-indent, .clickable-card p, .modal-box p, .academic-summary-box p, .question-callout p, blockquote p, .marco-grid p {
+            text-indent: 0 !important;
+        }
+
+        /* Elementos Reactivos */
+        ul li, ol li {
+            margin-bottom: 0.85rem;
+            margin-left: 2.5rem;
+            padding-left: 0.25rem;
+        }
+
+        ul li:hover, ol li:hover {
+            color: var(--red-formal);
+            transform: translateX(4px);
+        }
+
+        /* Cuadros y Bloques de Estilo */
+        .academic-summary-box {
+            background: #f8fafc;
+            border: 1px solid var(--border-color);
+            border-left: 4px solid var(--red-formal);
+            padding: 2rem;
+            font-family: 'Arial', sans-serif;
+            font-size: 0.95rem;
+            border-radius: 6px;
+            margin-bottom: 2.5rem;
+            box-shadow: inset 0 2px 4px rgba(0,0,0,0.02);
+            line-height: 1.6;
+        }
+
+        blockquote {
+            background: linear-gradient(135deg, var(--red-light) 0%, #ffffff 100%);
+            border-left: 5px solid var(--red-formal);
+            border-right: 1px solid var(--border-color);
+            border-top: 1px solid var(--border-color);
+            border-bottom: 1px solid var(--border-color);
+            padding: 2rem 2.5rem;
+            margin: 2.5rem 0;
+            font-style: italic;
+            color: var(--red-dark);
+            border-radius: 0 8px 8px 0;
+            box-shadow: var(--shadow-subtle);
+        }
+
+        .question-callout {
+            background-color: var(--red-light);
+            border: 1px dashed rgba(127, 29, 29, 0.3);
+            border-left: 6px solid var(--red-formal);
+            padding: 2rem;
+            border-radius: 6px;
+            margin-top: 2rem;
+            box-shadow: var(--shadow-subtle);
+        }
+
+        .question-callout p {
+            font-size: 1.25rem;
+            color: var(--red-dark);
+            font-weight: bold;
+            margin-bottom: 0;
+            line-height: 1.5;
+        }
+
+        /* Cuadrículas de Tarjetas Interactivas */
+        .interactive-grid {
+            display: grid;
+            grid-template-columns: repeat(auto-fill, minmax(320px, 1fr));
+            gap: 1.5rem;
+            margin-top: 1.5rem;
+        }
+
+        /* CUADRÍCULA ESPECÍFICA PARA MARCO REFERENCIAL (Cada una ocupa 1/3 exacto) */
+        .marco-grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: 1.5rem;
+            margin-top: 2rem;
+        }
+
+        .clickable-card {
+            background-color: #ffffff;
+            border: 1px solid var(--border-color);
+            padding: 1.75rem;
+            border-radius: 6px;
+            cursor: pointer;
+            position: relative;
+            font-family: 'Arial', sans-serif;
+            display: flex;
+            flex-direction: column;
+            justify-content: space-between;
+            box-shadow: var(--shadow-subtle);
+            min-height: 180px;
+        }
+
+        .clickable-card::before {
+            content: '';
+            position: absolute;
+            top: 0; left: 0; width: 4px; height: 100%;
+            background-color: var(--border-color);
+            border-radius: 6px 0 0 6px;
+        }
+
+        .clickable-card:hover {
+            transform: translateY(-5px);
+            box-shadow: var(--shadow-hover);
+            border-color: var(--red-formal);
+        }
+
+        .clickable-card:hover::before {
+            background-color: var(--red-formal);
+        }
+
+        .clickable-card h4 {
+            color: var(--red-formal);
+            font-size: 1.1rem;
+            margin-bottom: 0.5rem;
+            line-height: 1.4;
+        }
+
+        .card-badge {
+            font-size: 0.7rem;
+            font-weight: bold;
+            color: var(--red-formal);
+            text-transform: uppercase;
+            letter-spacing: 0.5px;
+            margin-bottom: 0.6rem;
+            display: block;
+        }
+
+        .card-hint {
+            font-size: 0.75rem;
+            color: var(--text-muted);
+            text-align: right;
+            margin-top: 1.25rem;
+            font-style: italic;
+        }
+
+        .clickable-card:hover .card-hint {
+            color: var(--red-formal);
+            font-weight: bold;
+        }
+
+        /* Ventanas Modales */
+        .modal-overlay {
+            display: none;
+            position: fixed;
+            top: 0; left: 0; width: 100%; height: 100%;
+            background-color: rgba(15, 23, 42, 0.6);
+            backdrop-filter: blur(4px);
+            z-index: 1000;
+            justify-content: center;
+            align-items: center;
+            padding: 1.5rem;
+        }
+
+        .modal-box {
+            background-color: #ffffff;
+            max-width: 800px;
+            width: 100%;
+            max-height: 85vh;
+            overflow-y: auto;
+            border-radius: 6px;
+            box-shadow: 0 25px 50px -12px rgba(0, 0, 0, 0.25);
+            border-top: 8px solid var(--red-formal);
+            position: relative;
+            animation: modalScaleUp 0.25s ease-out forwards;
+            padding: 2.5rem;
+        }
+
+        @keyframes modalScaleUp {
+            from { transform: scale(0.95); opacity: 0; }
+            to { transform: scale(1); opacity: 1; }
+        }
+
+        .modal-close {
+            position: absolute;
+            top: 1rem;
+            right: 1.5rem;
+            font-size: 2rem;
+            color: var(--text-muted);
+            cursor: pointer;
+        }
+
+        .modal-close:hover {
+            color: var(--red-formal);
+        }
+
+        .modal-content-area h3 {
+            margin-top: 0;
+            color: var(--red-formal);
+            border-bottom: 1px dashed var(--border-color);
+            padding-bottom: 0.5rem;
+            font-size: 1.4rem;
+        }
+
+        .modal-content-area p {
+            margin-top: 1rem;
+            line-height: 1.65;
+        }
+
+        .modal-section-title {
+            font-weight: bold;
+            color: var(--red-dark);
+            margin-top: 1.5rem;
+            text-transform: uppercase;
+            font-size: 0.85rem;
+            font-family: 'Arial', sans-serif;
+            border-bottom: 1px solid var(--border-color);
+            padding-bottom: 0.25rem;
+        }
+
+        .modal-quote {
+            background-color: var(--red-light);
+            border-left: 3px solid var(--red-formal);
+            padding: 0.75rem 1rem;
+            margin: 0.5rem 0;
+            font-style: italic;
+            font-size: 0.95rem;
+        }
+
+        .reference-link {
+            display: inline-block;
+            margin-top: 0.5rem;
+            color: var(--red-hover);
+            text-decoration: underline;
+            font-weight: bold;
+            font-family: 'Arial', sans-serif;
+            font-size: 0.9rem;
+        }
+
+        .reference-link:hover {
+            color: var(--red-dark);
+        }
+
+        .bibliography-list {
+            font-family: 'Arial', sans-serif;
+            font-size: 0.95rem;
+            line-height: 1.65;
+        }
+
+        .bibliography-list li {
+            margin-bottom: 1.15rem;
+            padding-left: 0.5rem;
+        }
+
+        .bibliography-list .reference-link {
+            margin-left: 0.5rem;
+        }
+
+        /* Ajustes Responsivos */
+        @media (max-width: 1024px) {
+            .marco-grid { grid-template-columns: 1fr; gap: 1.5rem; }
+        }
+        @media (max-width: 900px) {
+            .navigation-bar { grid-template-columns: repeat(3, 1fr); gap: 0.5rem; }
+            .document-page { padding: 3rem 2rem; }
+        }
+        @media (max-width: 600px) {
+            .navigation-bar { grid-template-columns: 1fr; }
+            .document-page { padding: 2rem 1.5rem; }
+        }
+
+        /* Presentación de página web de lectura continua */
+        html { scroll-behavior: smooth; scroll-padding-top: 5rem; }
+
+        :root {
+            --bg-main: #eef4f3;
+            --bg-container: #ffffff;
+            --red-formal: #0f766e;
+            --red-dark: #12343b;
+            --red-hover: #e05d44;
+            --red-light: #fff1ec;
+            --text-main: #173042;
+            --text-muted: #5d6f78;
+            --border-color: #d6e2df;
+        }
+
+        body {
+            font-family: 'Trebuchet MS', 'Segoe UI', sans-serif;
+            background: linear-gradient(135deg, #eef4f3 0%, #f8fbfa 55%, #fff4ef 100%);
+            line-height: 1.65;
+        }
+
+        .academic-header {
+            max-width: none;
+            margin: 0;
+            padding: 5.5rem max(2rem, calc((100% - 1120px) / 2)) 4.5rem;
+            text-align: left;
+            border: 0;
+            border-radius: 0;
+            background: linear-gradient(120deg, #12343b 0%, #195b5c 62%, #e05d44 100%);
+            color: #ffffff;
+            box-shadow: none;
+        }
+
+        .academic-header::before {
+            content: 'PROYECTO STEAM+T · HISTORIA, PODER Y MEMORIA';
+            display: block;
+            margin-bottom: 1.25rem;
+            color: #a8e2d7;
+            font: 700 0.75rem/1.2 'Trebuchet MS', sans-serif;
+            letter-spacing: 0.16em;
+        }
+
+        .academic-header h1 {
+            max-width: 760px;
+            color: #ffffff;
+            font-size: clamp(2.5rem, 6vw, 5.5rem);
+            font-weight: 700;
+            line-height: 0.98;
+            letter-spacing: -0.03em;
+            text-transform: none;
+        }
+
+        .academic-header {
+            position: relative;
+            overflow: hidden;
+            background-image: linear-gradient(120deg, rgba(18, 52, 59, 0.97), rgba(25, 91, 92, 0.84) 62%, rgba(224, 93, 68, 0.78)), url('https://upload.wikimedia.org/wikipedia/commons/8/86/Arbeit_Mach_Frei_gate_Auschwitz_2012.jpg');
+            background-size: cover;
+            background-position: center;
+        }
+
+        .academic-meta {
+            justify-content: flex-start;
+            gap: 0.75rem 2rem;
+            color: #d5ebe7;
+            margin-top: 2rem;
+        }
+
+        .academic-meta span strong { color: #ffffff; }
+
+        .navigation-bar {
+            position: sticky;
+            top: 0;
+            z-index: 20;
+            max-width: none;
+            margin: 0;
+            padding: 0.75rem max(1rem, calc((100% - 1120px) / 2));
+            display: flex;
+            gap: 0.5rem;
+            overflow-x: auto;
+            background: rgba(255, 255, 255, 0.94);
+            border-bottom: 1px solid var(--border-color);
+            box-shadow: 0 8px 24px rgba(18, 52, 59, 0.08);
+        }
+
+        .nav-button {
+            flex: 0 0 auto;
+            padding: 0.65rem 0.9rem;
+            border: 1px solid transparent;
+            border-radius: 999px;
+            background: transparent;
+            box-shadow: none;
+            color: var(--text-muted);
+            font-size: 0.78rem;
+            white-space: nowrap;
+            text-decoration: none;
+        }
+
+        .nav-button:hover,
+        .nav-button.active-page {
+            transform: none;
+            color: var(--red-dark);
+            background: #dff3ee;
+            border-color: #b7dfd6;
+            box-shadow: none;
+        }
+
+        .page-wrapper {
+            max-width: 1120px;
+            padding: 2rem 1rem 3rem;
+        }
+
+        .document-page,
+        .document-page.active-page {
+            display: block;
+            margin-bottom: 1.5rem;
+            padding: clamp(2rem, 5vw, 4.5rem) clamp(1.25rem, 5vw, 4rem);
+            border: 0;
+            border-top: 5px solid var(--red-formal);
+            border-radius: 12px;
+            box-shadow: 0 12px 40px rgba(18, 52, 59, 0.08);
+            scroll-margin-top: 5rem;
+            animation: none;
+        }
+
+        .document-page:nth-child(even) { border-top-color: var(--red-hover); }
+
+        h2 {
+            color: var(--red-dark);
+            font-size: clamp(1.7rem, 3vw, 2.7rem);
+            border-bottom: 0;
+            margin-bottom: 1.5rem;
+            text-transform: none;
+            letter-spacing: -0.02em;
+        }
+
+        h3 { color: var(--red-formal); margin-top: 2.25rem; }
+        p { text-align: left; }
+
+        .academic-summary-box { background: #f1f8f6; border-left-color: var(--red-formal); }
+        blockquote { background: linear-gradient(135deg, var(--red-light), #ffffff); }
+
+        .visual-context {
+            display: grid;
+            grid-template-columns: repeat(2, minmax(0, 1fr));
+            gap: 1.5rem;
+            margin: 1.5rem 0;
+        }
+
+        .visual-context figure {
+            position: relative;
+            min-height: 300px;
+            margin: 0;
+            overflow: hidden;
+            border-radius: 12px;
+            background: var(--red-dark);
+            box-shadow: 0 12px 32px rgba(18, 52, 59, 0.14);
+        }
+
+        .visual-context img {
+            display: block;
+            width: 100%;
+            height: 100%;
+            min-height: 300px;
+            object-fit: cover;
+            opacity: 0.82;
+        }
+
+        .visual-context figcaption {
+            position: absolute;
+            right: 0;
+            bottom: 0;
+            left: 0;
+            padding: 3.5rem 1.5rem 1.25rem;
+            color: #ffffff;
+            background: linear-gradient(transparent, rgba(18, 52, 59, 0.95));
+        }
+
+        .visual-context figcaption strong,
+        .visual-context figcaption span { display: block; }
+        .visual-context figcaption strong { font-size: 1.25rem; }
+        .visual-context figcaption span { margin-top: 0.25rem; color: #d5ebe7; font-size: 0.82rem; }
+
+        .site-footer {
+            padding: 4rem max(1.25rem, calc((100% - 1120px) / 2));
+            color: #d5ebe7;
+            background: #12343b;
+        }
+
+        .bibliography-modal .site-footer {
+            position: relative;
+            max-width: 900px;
+            max-height: 85vh;
+            overflow-y: auto;
+            border-top: 5px solid var(--red-hover);
+            border-radius: 12px;
+            box-shadow: 0 25px 60px rgba(0, 0, 0, 0.3);
+            transform: translateY(2rem);
+            transition: transform 0.5s cubic-bezier(0.16, 1, 0.3, 1);
+        }
+
+        .bibliography-modal {
+            display: flex;
+            opacity: 0;
+            visibility: hidden;
+            pointer-events: none;
+            transition: opacity 0.35s ease, visibility 0s linear 0.35s;
+        }
+
+        .bibliography-modal.is-open {
+            opacity: 1;
+            visibility: visible;
+            pointer-events: auto;
+            transition-delay: 0s;
+        }
+
+        .bibliography-modal.is-open .site-footer { transform: translateY(0); }
+
+        .bibliography-close {
+            position: absolute;
+            top: 1rem;
+            right: 1.25rem;
+            width: 2.25rem;
+            height: 2.25rem;
+            border: 1px solid rgba(213, 235, 231, 0.35);
+            border-radius: 50%;
+            background: transparent;
+            color: #ffffff;
+            font-size: 1.35rem;
+            cursor: pointer;
+        }
+
+        .bibliography-close:hover { background: rgba(255, 255, 255, 0.12); }
+
+        .bibliography-tab {
+            position: fixed;
+            left: 1.5rem;
+            bottom: 0;
+            z-index: 30;
+            padding: 0.75rem 1.25rem 0.85rem;
+            border: 0;
+            border-top: 3px solid var(--red-hover);
+            border-radius: 10px 10px 0 0;
+            background: var(--red-dark);
+            color: #ffffff;
+            font: 700 0.8rem 'Trebuchet MS', sans-serif;
+            letter-spacing: 0.04em;
+            cursor: pointer;
+            box-shadow: 0 -5px 18px rgba(18, 52, 59, 0.16);
+        }
+
+        .bibliography-rail {
+            position: fixed;
+            right: 0;
+            bottom: 0;
+            left: 1.5rem;
+            z-index: 29;
+            height: 3px;
+            background: var(--red-hover);
+            border-top: 3px solid var(--red-hover);
+            pointer-events: none;
+        }
+
+        .bibliography-tab:hover { padding-bottom: 1.1rem; background: var(--red-formal); }
+
+        .site-footer h2 { color: #ffffff; }
+        .site-footer-intro { max-width: 620px; margin-bottom: 2rem; color: #b8d8d3; }
+        .site-footer .bibliography-list { columns: 2; column-gap: 3rem; }
+        .site-footer .bibliography-list li { break-inside: avoid; margin-left: 2.5rem; }
+        .site-footer .reference-link { color: #ffb09e; }
+        .footer-credit { margin-top: 2.5rem; padding-top: 1.25rem; border-top: 1px solid rgba(213, 235, 231, 0.2); font-size: 0.8rem; color: #9fc4be; }
+
+        @media (max-width: 700px) {
+            .visual-context { grid-template-columns: 1fr; }
+            .site-footer .bibliography-list { columns: 1; }
+            .bibliography-modal .site-footer { max-height: 90vh; }
+            .bibliography-tab { left: 1rem; font-size: 0.72rem; }
+            .bibliography-rail { left: 1rem; }
+        }
+
+        @media (max-width: 600px) {
+            .academic-header { padding: 4rem 1.25rem 3rem; }
+            .academic-header h1 { font-size: 3rem; }
+            .page-wrapper { padding-top: 1rem; }
+            .navigation-bar { grid-template-columns: none; }
+        }
+    </style>
+</head>
+<body>
+
+    <!-- Encabezado Fijo Institucional -->
+    <header class="academic-header">
+        <h1>La Arquitectura de la indiferencia</h1>
+        <div class="academic-meta">
+            <span><strong>Estudiante:</strong> Emiliano Cómbita Ramírez</span>
+            <span><strong>Curso:</strong> 10-C</span>
+            <span><strong>Institución:</strong> Fundación Universitaria Católica del Norte</span>
+        </div>
+    </header>
+
+    <!-- Navegación de una sola página -->
+    <nav class="navigation-bar">
+        <a class="nav-button active-page" href="#page-1">Delimitación</a>
+        <a class="nav-button" href="#page-2">Antecedentes</a>
+        <a class="nav-button" href="#page-3">Objetivos</a>
+        <a class="nav-button" href="#page-4">Fichas Bib.</a>
+        <a class="nav-button" href="#page-5">Marco Ref.</a>
+        <a class="nav-button" href="#page-6">Metodología</a>
+        <a class="nav-button" href="#page-7">Resultados</a>
+        <a class="nav-button" href="#bibliografia" onclick="openBibliography(event)">Bibliografía</a>
+    </nav>
+
+    <!-- Envoltura de Documentos -->
+    <main class="page-wrapper">
+
+        <!-- PAGINA 1: DELIMITACION -->
+        <section id="page-1" class="document-page active-page">
+            <h2>Introducción y Delimitación del Proyecto</h2>
+            
+            <div class="academic-summary-box">
+                <strong>Línea 1:</strong> Poder, política y conflicto en las sociedades.<br>
+                <strong>Comparaciones históricas:</strong> Nazismo, guerras mundiales y revoluciones como marcos para analizar poder y violencia.<br>
+                <strong>Ámbito Geográfico/Temporal:</strong> Alemania (1933 - 1945).<br>
+                <strong>Eje central / Problemático:</strong> ¿Cómo se normaliza la violencia dentro de una sociedad bajo un determinado sistema de poder político, como ocurrió en la Alemania nazi y con el conflicto armado en Colombia?
+            </div>
+            
+            <h3>Tema Delimitado</h3>
+            <blockquote>
+                <p>Análisis comparativo del poder político y dinámicas de violencia en Europa en el siglo XX, en relación con el conflicto armado en Colombia entre 1960-2016, teniendo como propósito comprender cómo el poder y su estructuración influyen en los conflictos sociales y políticos a lo largo de la historia.</p>
+            </blockquote>
+
+            <h3>Explicación de la Situación o Problema</h3>
+            <p>Durante el siglo XX ocurrieron eventos que marcaron profundamente la historia como lo son el nazismo, las guerras mundiales y algunas revoluciones. Todos estos eventos se caracterizaron por el abuso del poder político, la violencia y la lucha por el control de tierras y poblaciones. Estos eventos se relacionan de cierta manera con el conflicto armado en Colombia. A pesar de que estos ocurrieran en época distintas, tienen similitudes como lo son la afectación a millones de personas, consecuencias sociales y políticas y económicas.</p>
+            <p>Esta situación merece investigarse porque permite entender cómo la estructuración del poder político, sus ideologías y los problemas sociales contribuyen en la creación de conflictos violentos. Aunque el nazismo o las guerras mundiales se desarrollaron principalmente en Europa y el conflicto armado colombiano en otra nación, en ambos casos se identifica cómo las decisiones políticas and la centralización del poder pueden generar conflictos que afectan a la población.</p>
+
+            <h3>Pregunta de Investigación</h3>
+            <div class="question-callout">
+                <p>¿Cómo se normalizó la violencia en la sociedad de la Alemania nazi a través del poder político y que resonancia tuvo en el conflicto armado en Colombia?</p>
+            </div>
+
+            <div class="visual-context" aria-label="Contextos históricos comparados">
+                <figure>
+                    <img src="https://upload.wikimedia.org/wikipedia/commons/6/64/Adolf_Hitler%27s_speech_in_the_Reichstag%2C_30_January_1939.jpg" alt="Discurso político en el Reichstag durante la Alemania nazi" loading="lazy">
+                    <figcaption><strong>Alemania nazi</strong><span>Poder político, propaganda y burocratización de la violencia.</span></figcaption>
+                </figure>
+                <figure>
+                    <img src="https://upload.wikimedia.org/wikipedia/commons/6/60/Collage_conflicto_interno_armado_en_Colombia.jpg" alt="Collage documental sobre el conflicto armado en Colombia" loading="lazy">
+                    <figcaption><strong>Conflicto armado en Colombia</strong><span>Memoria, desplazamiento y consecuencias sociales de la violencia.</span></figcaption>
+                </figure>
+                <figure>
+                    <img src="https://upload.wikimedia.org/wikipedia/commons/c/c0/Auschwitz_II_Birkenau.jpg" alt="Vista del campo de concentración de Auschwitz-Birkenau" loading="lazy">
+                    <figcaption><strong>La violencia sistemática</strong><span>Espacios, registros y estructuras que hicieron posible el exterminio.</span></figcaption>
+                </figure>
+                <figure>
+                    <img src="https://upload.wikimedia.org/wikipedia/commons/7/7f/FARC_commanders_during_the_Caguan_peace_talks_%281998-2002%29.jpg" alt="Conversaciones de paz de El Caguán en Colombia" loading="lazy">
+                    <figcaption><strong>Memoria y negociación</strong><span>El conflicto colombiano visto desde sus actores y procesos de paz.</span></figcaption>
+                </figure>
+            </div>
+        </section>
+
+
+        <!-- PAGINA 2: ANTECEDENTES -->
+        <section id="page-2" class="document-page">
+            <h2>Antecedentes de Investigación</h2>
+            <p class="no-indent" style="color: var(--text-muted); font-style: italic; margin-bottom: 1.5rem;"> Haz clic sobre cualquiera de los 5 antecedente historiográficos e institucionales para expandirlos y leer la información completa</p>
+            
+            <div class="interactive-grid">
+                <div class="clickable-card" onclick="openModal('ant1')">
+                    <div>
+                        <span class="card-badge">Antecedente 1</span>
+                        <h4>Normalizar el conflicto y desnormalizar la violencia...</h4>
+                        <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.5rem;">Padilla, A. y Bermúdez, A. (2016)</p>
+                    </div>
+                    <span class="card-hint">Hacer clic para ampliar →</span>
+                </div>
+                <div class="clickable-card" onclick="openModal('ant2')">
+                    <div>
+                        <span class="card-badge">Antecedente 2</span>
+                        <h4>Cotidianidad y violencia en un campo de concentración nazi</h4>
+                        <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.5rem;">Rauschenberg, N. (2016)</p>
+                    </div>
+                    <span class="card-hint">Hacer clic para ampliar →</span>
+                </div>
+                <div class="clickable-card" onclick="openModal('ant3')">
+                    <div>
+                        <span class="card-badge">Antecedente 3</span>
+                        <h4>Funcionarios de la violencia – La violencia y su imagen...</h4>
+                        <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.5rem;">Sánchez-Biosca, V. (1997)</p>
+                    </div>
+                    <span class="card-hint">Hacer clic para ampliar →</span>
+                </div>
+                <div class="clickable-card" onclick="openModal('ant4')">
+                    <div>
+                        <span class="card-badge">Antecedente 4</span>
+                        <h4>Mayorías sin democracia. Desequilibrio de poderes...</h4>
+                        <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.5rem;">García Villegas, M., & Revelo Rebolledo, J. E. (2009)</p>
+                    </div>
+                    <span class="card-hint">Hacer clic para ampliar →</span>
+                </div>
+                <div class="clickable-card" onclick="openModal('ant5')">
+                    <div>
+                        <span class="card-badge">Antecedente 5</span>
+                        <h4>Debate de entorno a la figura de Gerardo Reichel-Dolmatoff</h4>
+                        <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.5rem;">Lomnitz, C. (2017)</p>
+                    </div>
+                    <span class="card-hint">Hacer clic para ampliar →</span>
+                </div>
+            </div>
+        </section>
+
+
+        <!-- PAGINA 3: OBJETIVOS -->
+        <section id="page-3" class="document-page">
+            <h2>Objetivos y Categorías de Análisis</h2>
+            
+            <h3>Objetivo General</h3>
+            <p class="no-indent" style="font-size: 1.25rem; padding: 1.5rem; border-left: 4px solid var(--red-formal); background: var(--bg-main); color: var(--red-dark); font-weight: normal;">
+                Analizar la normalización de la violencia en la Alemania nazi y la influencia del poder político.
+            </p>
+
+            <h3>Objetivos Específicos</h3>
+            <ol style="margin-top: 1rem;">
+                <li>Explicar mediante un cortometraje el desarrollo de las formas de violencia en la Alemania nazi y su impacto socio-político local, visibilizando las dinámicas de persecución e indiferencia colectiva. (Artes y tecnología).</li>
+                <li>Analizar por qué países con registros de población más sofisticados y centralizados tuvieron tasas de mortalidad más altas que aquellos con sistemas menos eficientes.</li>
+            </ol>
+
+            <h3>Categorías de Análisis</h3>
+            <ul>
+                <li>Violencia en la Alemania nazi</li>
+                <li>Influencia del poder político</li>
+                <li>Aceptación social de la violencia</li>
+            </ul>
+        </section>
+
+
+        <!-- PAGINA 4: FICHAS BIBLIOGRAFICAS -->
+        <section id="page-4" class="document-page">
+            <h2>Fichas Bibliográficas</h2>
+            <p class="no-indent" style="color: var(--text-muted); font-style: italic; margin-bottom: 1.5rem;">Haz clic sobre cualquiera de las 12 fichas de lectura e investigación bibliográfica para desplegar el contenido íntegro registrado en la base de datos junto a sus enlaces oficiales.</p>
+            
+            <div class="interactive-grid">
+                <div class="clickable-card" onclick="openModal('f1')">
+                    <div><span class="card-badge">Ficha 1 | Violencia</span><h4>Funcionarios de la violencia</h4><p style="font-size: 0.8rem; color: var(--text-muted);">Biosca, V. S. (1997)</p></div><span class="card-hint">Ampliar Ficha →</span>
+                </div>
+                <div class="clickable-card" onclick="openModal('f2')">
+                    <div><span class="card-badge">Ficha 2 | Violencia</span><h4>Civilización y violencia</h4><p style="font-size: 0.8rem; color: var(--text-muted);">Elias, N. (1987)</p></div><span class="card-hint">Ampliar Ficha →</span>
+                </div>
+                <div class="clickable-card" onclick="openModal('f3')">
+                    <div><span class="card-badge">Ficha 3 | Violencia</span><h4>La Alemania nazi</h4><p style="font-size: 0.8rem; color: var(--text-muted);">Núñez Fernández, P.</p></div><span class="card-hint">Ampliar Ficha →</span>
+                </div>
+                <div class="clickable-card" onclick="openModal('f4')">
+                    <div><span class="card-badge">Ficha 4 | Violencia</span><h4>Análisis en masa y genocidio...</h4><p style="font-size: 0.8rem; color: var(--text-muted);">Kramer, A. (2009)</p></div><span class="card-hint">Ampliar Ficha →</span>
+                </div>
+                <div class="clickable-card" onclick="openModal('f5')">
+                    <div><span class="card-badge">Ficha 5 | Poder Político</span><h4>El ascenso de Hitler al poder...</h4><p style="font-size: 0.8rem; color: var(--text-muted);">Cuervo Álvarez, B. (2015)</p></div><span class="card-hint">Ampliar Ficha →</span>
+                </div>
+                <div class="clickable-card" onclick="openModal('f6')">
+                    <div><span class="card-badge">Ficha 6 | Poder Político</span><h4>Ubicación del fascismo...</h4><p style="font-size: 0.8rem; color: var(--text-muted);">Díez Castaño, J. F. (2020)</p></div><span class="card-hint">Ampliar Ficha →</span>
+                </div>
+                <div class="clickable-card" onclick="openModal('f7')">
+                    <div><span class="card-badge">Ficha 7 | Poder Político</span><h4>La mixofobia como política de Estado...</h4><p style="font-size: 0.8rem; color: var(--text-muted);">Rodríguez-García, D. (2014)</p></div><span class="card-hint">Ampliar Ficha →</span>
+                </div>
+                <div class="clickable-card" onclick="openModal('f8')">
+                    <div><span class="card-badge">Ficha 8 | Poder Político</span><h4>Construcción cinematográfica del enemigo...</h4><p style="font-size: 0.8rem; color: var(--text-muted);">Pinzón Olarte, I. N. (2017)</p></div><span class="card-hint">Ampliar Ficha →</span>
+                </div>
+                <div class="clickable-card" onclick="openModal('f9')">
+                    <div><span class="card-badge">Ficha 9 | Aceptación Social</span><h4>Desde la vergüenza y la humillación...</h4><p style="font-size: 0.8rem; color: var(--text-muted);">Marks, S. (2008)</p></div><span class="card-hint">Ampliar Ficha →</span>
+                </div>
+                <div class="clickable-card" onclick="openModal('f10')">
+                    <div><span class="card-badge">Ficha 10 | Aceptación Social</span><h4>Representaciones Sociales de la Segunda GM</h4><p style="font-size: 0.8rem; color: var(--text-muted);">Sosa, Natapof & Zubieta (2017)</p></div><span class="card-hint">Ampliar Ficha →</span>
+                </div>
+                <div class="clickable-card" onclick="openModal('f11')">
+                    <div><span class="card-badge">Ficha 11 | Aceptación Social</span><h4>La obediencia civil...</h4><p style="font-size: 0.8rem; color: var(--text-muted);">Alvéstegui, A. (2016)</p></div><span class="card-hint">Ampliar Ficha →</span>
+                </div>
+                <div class="clickable-card" onclick="openModal('f12')">
+                    <div><span class="card-badge">Ficha 12 | Aceptación Social</span><h4>La mixofobia como política de Estado (II)</h4><p style="font-size: 0.8rem; color: var(--text-muted);">García, D. R. (2014)</p></div><span class="card-hint">Ampliar Ficha →</span>
+                </div>
+            </div>
+        </section>
+
+
+        <!-- PAGINA 5: MARCO REFERENCIAL (COMPACTO A 1/3 CON INTERACCIÓN MODAL) -->
+        <section id="page-5" class="document-page">
+            <h2>Marco Referencial</h2>
+            <p style="margin-bottom: 2rem;">El presente marco referencial busca dar respuesta a la pregunta inicial, con información, conceptos y datos sobre cómo la transformación de la guerra, la aplicación del control legal y psicopolítico, y la respuesta psicológica colectiva permitieron el desarrollo de la violencia extrema en la Alemania nazi. A continuación, se presentarán cada una de las categorías definidas por los autores e instituciones, para tener un mayor entendimiento de estos conceptos:</p>
+            
+            <p class="no-indent" style="color: var(--text-muted); font-style: italic; margin-bottom: 1.5rem;">Haz clic sobre cualquiera de las 3 categorías para abrir el marco referencial completo</p>
+
+            <div class="marco-grid">
+                <!-- Tarjeta de Categoría 1 -->
+                <div class="clickable-card" onclick="openModal('marco1')">
+                    <div>
+                        <span class="card-badge">Categoría I</span>
+                        <h4>1. Violencia en la Alemania nazi</h4>
+                        <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.5rem;">La violencia extrema del siglo XX no fue un hecho planeado, sino que fue el resultado de los cambios en las dinámicas de la guerra moderna.</p>
+                    </div>
+                    <span class="card-hint">Hacer clic para leer completo →</span>
+                </div>
+
+                <!-- Tarjeta de Categoría 2 -->
+                <div class="clickable-card" onclick="openModal('marco2')">
+                    <div>
+                        <span class="card-badge">Categoría II</span>
+                        <h4>2. Influencia del poder político</h4>
+                        <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.5rem;">Desde el punto de vista jurídico, Díez Castaño (2020) situó al nazismo dentro de la derecha extrema como un despliegue en respuesta a la política izquierdista</p>
+                    </div>
+                    <span class="card-hint">Hacer clic para leer completo →</span>
+                </div>
+
+                <!-- Tarjeta de Categoría 3 -->
+                <div class="clickable-card" onclick="openModal('marco3')">
+                    <div>
+                        <span class="card-badge">Categoría III</span>
+                        <h4>3. Aceptación social de la violencia</h4>
+                        <p style="font-size: 0.85rem; color: var(--text-muted); margin-top: 0.5rem;">Está violencia gubernamental, en términos sociológicos, resultó en una interrupción de la paz durante momentos críticos y un estallido de conductas colectivas desordenadas</p>
+                    </div>
+                    <span class="card-hint">Hacer clic para leer completo →</span>
+                </div>
+            </div>
+        </section>
+
+
+        <!-- PAGINA 6: METODOLOGIA -->
+        <section id="page-6" class="document-page">
+            <h2>6. Metodología</h2>
+            <p class="no-indent" style="font-weight: bold; color: var(--red-formal); margin-bottom: 1rem; font-family: Arial, sans-serif; font-size: 1.1rem;">
+                Enfoque Metodológico: Mixto (Cualitativo / Cuantitativo)
+            </p>
+            <p>La investigación adopta un enfoque mixto (cualitativo y cuantitativo) para analizar la normalización de la violencia en la Alemania nazi y la influencia del poder político, articulando la experiencia humana con el análisis de datos históricos y estadísticos.</p>
+            <div class="academic-summary-box">
+                <strong>Técnicas de recolección:</strong> Historias de Vida y Análisis Documental.<br>
+                <strong>Instrumentos:</strong> Matriz de Análisis de Historias de Vida y Matriz de Análisis Documental.<br>
+                <strong>Población:</strong> Víctimas del régimen nazi durante el periodo 1933-1945.<br>
+                <strong>Muestra intencional:</strong> Testimonios de Paquita Sitzer, Albert Barbouth, Charlotte Günberg e Irene Sashar; y la serie documental <em>Hitler toma Oriente: Operación Barbarroja</em> (National Geographic / Disney+, 2022).<br>
+                <strong>Prototipo STEAM+T:</strong> Cortometraje audiovisual sobre deshumanización, poder político y aceptación social de la violencia.
+            </div>
+            <p>La investigación adopta un enfoque mixto (cualitativo y cuantitativo), el cual resulta perfecto para analizar completamente la normalización de la violencia en la Alemania nazi y la influencia del poder político, al articular la vivencia humana con el análisis de datos estructurales y estadísticos. En relación con este enfoque y para abordar las categorías de análisis (Violencia en la Alemania nazi, Influencia del poder político y Aceptación social de la violencia), se definieron dos técnicas de recolección: por un lado, las Historias de Vida, una técnica cualitativa dirigida al primer objetivo específico para examinar el impacto político y social de las formas de violencia a nivel local; y por otro lado, el Análisis Documental, técnica cualitativa y cuantitativa orientada al segundo objetivo específico para contrastar cómo la eficiencia y centralización de los registros de población  incrementaron las tasas de mortalidad frente a sistemas menos sofisticados. Como instrumentos de recolección, se utilizaron matrices de análisis (Matriz de Análisis de Historias de Vida y Matriz de Análisis Documental) que permitieron interpretar la información relevante. La población del estudio abarca a las víctimas del régimen nazi y el periodo (1933–1945), delimitando una muestra intencional conformada por cuatro testimonios de sobrevivientes del Holocausto (Paquita Sitzer, Albert Barbouth, Charlotte Günberg e Irene Sashar) y la serie documental "Hitler toma Oriente: Operación Barbarroja" (National Geographic / Disney+, 2022). Finalmente, como prototipo para evidenciar de forma tangible e interdisciplinar los resultados de la investigación, se desarrolla un cortometraje que sintetiza, mediante el lenguaje audiovisual y tecnológico, las dinámicas de deshumanización, el peso del poder político y los procesos de aceptación social de la violencia.</p>
+        </section>
+
+        <!-- PAGINA 7: RESULTADOS -->
+        <section id="page-7" class="document-page">
+            <h2>7. Resultados y Análisis</h2>
+            <p>La aplicación del enfoque mixto permitió sistematizar hallazgos sobre la persecución, la instrumentalización del poder político y la eficiencia técnica del régimen nazi. Haz clic en cada bloque para consultar la evidencia registrada.</p>
+            <div class="interactive-grid">
+                <div class="clickable-card" onclick="openModal('res1')"><div><span class="card-badge">Historias de vida</span><h4>Paquita Sitzer</h4><p>Éxodo, documentos falsos y redes de solidaridad.</p></div><span class="card-hint">Ver resultado →</span></div>
+                <div class="clickable-card" onclick="openModal('res2')"><div><span class="card-badge">Historias de vida</span><h4>Albert Barbouth</h4><p>Exclusión social convertida en prohibiciones cotidianas.</p></div><span class="card-hint">Ver resultado →</span></div>
+                <div class="clickable-card" onclick="openModal('res3')"><div><span class="card-badge">Historias de vida</span><h4>Charlotte Günberg</h4><p>Persecución administrativa y vida clandestina.</p></div><span class="card-hint">Ver resultado →</span></div>
+                <div class="clickable-card" onclick="openModal('res4')"><div><span class="card-badge">Historias de vida</span><h4>Irene Sashar</h4><p>Gueto, encierro y silencio bajo el terror de Estado.</p></div><span class="card-hint">Ver resultado →</span></div>
+                <div class="clickable-card" onclick="openModal('res5')"><div><span class="card-badge">Análisis documental</span><h4>Operación Barbarroja</h4><p>Datos de movilización, coerción, destrucción y Babi Yar.</p></div><span class="card-hint">Ver resultado →</span></div>
+                <div class="clickable-card" onclick="openModal('res6')"><div><span class="card-badge">Registro poblacional</span><h4>Burocracia y mortalidad</h4><p>Relación entre centralización de registros y persecución.</p></div><span class="card-hint">Ver resultado →</span></div>
+            </div>
+
+            <h3>Análisis de los Resultados</h3>
+            <p>Los hallazgos muestran que la violencia nazi no fue caótica: avanzó desde la discriminación burocrática hasta la aniquilación masiva mediante poder político, racionalización y aceptación social progresiva.</p>
+            <div class="interactive-grid">
+                <div class="clickable-card" onclick="openModal('analisis1')"><div><span class="card-badge">Categoría 1</span><h4>De la exclusión a la aniquilación</h4><p>La violencia pasó de la segregación legal al exterminio sistemático.</p></div><span class="card-hint">Leer análisis →</span></div>
+                <div class="clickable-card" onclick="openModal('analisis2')"><div><span class="card-badge">Categoría 2</span><h4>Poder político y tecnología</h4><p>La burocracia y los registros se transformaron en instrumentos de persecución.</p></div><span class="card-hint">Leer análisis →</span></div>
+                <div class="clickable-card" onclick="openModal('analisis3')"><div><span class="card-badge">Categoría 3</span><h4>Aceptación social</h4><p>La obediencia, la propaganda y la pasividad fracturaron la empatía comunitaria.</p></div><span class="card-hint">Leer análisis →</span></div>
+                <div class="clickable-card" onclick="openModal('analisis4')"><div><span class="card-badge">Artes y tecnología</span><h4>El cortometraje como prototipo</h4><p>El lenguaje audiovisual convierte los hallazgos en una experiencia pedagógica.</p></div><span class="card-hint">Leer análisis →</span></div>
+                <div class="clickable-card" onclick="openModal('analisis5')"><div><span class="card-badge">Colombia</span><h4>Transversalidad histórica</h4><p>Desplazamiento, estigmatización, burocracia e impunidad conectan ambos contextos.</p></div><span class="card-hint">Leer análisis →</span></div>
+            </div>
+        </section>
+
+    </main>
+
+    <div class="bibliography-rail" aria-hidden="true"></div>
+    <button class="bibliography-tab" type="button" onclick="openBibliography(event)">Bibliografía ↗</button>
+
+    <div id="bibliography-modal" class="modal-overlay bibliography-modal" onclick="closeBibliography()">
+        <footer id="bibliografia" class="site-footer" onclick="event.stopPropagation()">
+            <button class="bibliography-close" type="button" aria-label="Cerrar bibliografía" onclick="closeBibliography()">&times;</button>
+            <h2>Bibliografía</h2>
+            <p class="site-footer-intro">Fuentes bibliográficas, audiovisuales y testimoniales utilizadas para construir este proyecto.</p>
+            <ol class="bibliography-list">
+                <li>García, D. R. (2014). <em>Revista de Demografía Histórica</em>.</li>
+                <li>Alvéstegui, A. (2016). <em>Cuadernos Judaicos</em>.</li>
+                <li>Sosa, F. M., Natapof, D. G., &amp; Zubieta, E. M. (2017). <em>Revista Psicodebate</em>.</li>
+                <li>Marks, S. (2008).</li>
+                <li>Pinzón Olarte, I. N. (2017). <em>Dialnet</em>.</li>
+                <li>Rodríguez-García, D. (2014). <em>Dialnet</em>.</li>
+                <li>Díez Castaño, J. F. (2020). <em>Dialnet</em>.</li>
+                <li>Álvarez, B. C. (2015). <em>Dialnet</em>.</li>
+                <li>Kramer, A. (2009). <em>Ayer</em>, (76), 177-205.</li>
+                <li>Núñez Fernández, P. <em>La Alemania Nazi</em>.</li>
+                <li>Dialnet Métricas (Elias, N., 1987).</li>
+                <li>Biosca, V. S. (1997). <em>Dialnet</em>.</li>
+                <li>Clarke, I. y Costelle, D. (Directores). (2022). <em>Hitler toma Oriente: Operación Barbarroja</em> [Serie documental]. CC&amp;C; Ideacom International.</li>
+                <li>Centro Sefarad-Israel. (2025, 6 de febrero). <em>La voz de la memoria. Testimonio del superviviente Albert Barbouth</em> [Video]. YouTube. <a class="reference-link" href="https://www.youtube.com/watch?v=JVtFlTvoNmk" target="_blank" rel="noopener noreferrer">Ver video</a></li>
+                <li>Centro Sefarad-Israel. (2021, 19 de enero). <em>Mi huida de los nazis. La historia de Paquita Sitzer</em> [Video]. YouTube. <a class="reference-link" href="https://www.youtube.com/watch?v=8VLJZH_8prA" target="_blank" rel="noopener noreferrer">Ver video</a></li>
+                <li>Centro Sefarad-Israel. (2019, 17 de mayo). <em>Charlotte de Grünberg, superviviente del Holocausto</em> [Video]. YouTube. <a class="reference-link" href="https://www.youtube.com/watch?v=FkVQFIWs8x4" target="_blank" rel="noopener noreferrer">Ver video</a></li>
+                <li>Centro Sefarad-Israel. (2023, 1 de febrero). <em>Irene Shashar, superviviente del Holocausto</em> [Video]. YouTube. <a class="reference-link" href="https://www.youtube.com/watch?v=1Q3Ggy2rnAQ" target="_blank" rel="noopener noreferrer">Ver video</a></li>
+            </ol>
+            <p class="footer-credit">Proyecto STEAM+T · Emiliano Cómbita Ramírez · Curso 10-C</p>
+        </footer>
+    </div>
+
+    <!-- VENTANA FLOTANTE UNIVERSAL (MODAL) -->
+    <div id="custom-modal" class="modal-overlay" onclick="closeModal()">
+        <div class="modal-box" onclick="event.stopPropagation()">
+            <span class="modal-close" onclick="closeModal()">&times;</span>
+            <div id="modal-content-target" class="modal-content-area">
+                <!-- Inyección dinámica vía JavaScript -->
+            </div>
+        </div>
+    </div>
+
+    <!-- CONTROLADOR JAVASCRIPT Y BASE DE DATOS COMPLETA -->
+    <script>
+        function openBibliography(event) {
+            event.preventDefault();
+            document.getElementById('bibliography-modal').classList.add('is-open');
+            document.getElementById('bibliography-modal').setAttribute('aria-hidden', 'false');
+            document.body.style.overflow = 'hidden';
+        }
+
+        function closeBibliography() {
+            document.getElementById('bibliography-modal').classList.remove('is-open');
+            document.getElementById('bibliography-modal').setAttribute('aria-hidden', 'true');
+            document.body.style.overflow = '';
+        }
+
+        document.addEventListener('keydown', event => {
+            if (event.key === 'Escape') closeBibliography();
+        });
+
+        function updateActiveNavigation() {
+            const sections = document.querySelectorAll('.document-page');
+            const links = document.querySelectorAll('.nav-button');
+            const marker = window.scrollY + 140;
+            let activeIndex = 0;
+
+            sections.forEach((section, index) => {
+                if (section.offsetTop <= marker) activeIndex = index;
+            });
+
+            links.forEach((link, index) => {
+                link.classList.toggle('active-page', index === activeIndex);
+            });
+        }
+
+        window.addEventListener('scroll', updateActiveNavigation, { passive: true });
+        window.addEventListener('hashchange', updateActiveNavigation);
+        updateActiveNavigation();
+
+        const modalDatabase = {
+            ant1: {
+                title: "Normalizar el conflicto y desnormalizar la violencia: retos y posibilidades de la enseñanza crítica de la historia del conflicto armado colombiano",
+                meta: "Autor: Padilla, A. y Bermúdez, A. (2016)",
+                html: `
+                    <div class="modal-section-title">Palabras Clave</div>
+                    <p>Educación para la paz | Enseñanza de la historia | Conflicto armado colombiano | Pensamiento crítico | Deslegitimación de la violencia | Análisis narrativo</p>
+                    <div class="modal-section-title">Resumen de la Investigación</div>
+                    <p>Este artículo de investigación analiza cómo la historia puede contribuir a los procesos de educación para la paz en las escuelas colombianas. El artículo compara diferentes textos: ¡Basta Ya! Colombia: Memorias de guerra y dignidad del Grupo de Memoria Histórica. El análisis se enfoca en tres ejes principales: la estructura del relato, la explicación de las causas de la violencia y la representación de la experiencia de las víctimas.</p>
+                    <p>Los resultados revelan un contraste marcado entre ambos tipos de materiales. Mientras que los textos escolares tienden a presentar una estructura cronológica lineal centrada en las acciones del Gobierno, lo que invisibilizan a las víctimas y normalizan la violencia, el informe integra la perspectiva de las víctimas y busca deslegitimar el uso de la violencia. El artículo concluye con recomendaciones para transformar la enseñanza de la historia en una herramienta que fomente el pensamiento crítico y la no repetición de hechos violentos.</p>
+                    <div class="modal-section-title">Relación con el Tema de Investigación</div>
+                    <p>El artículo permite establecer unas relaciones entre el conflicto armado colombiano y la Alemania nazi; mientras que las Guerras Mundiales suelen enseñarse bajo una estructura de "héroes y villanos" que puede justificar el uso de la fuerza para un "bien mayor", el conflicto colombiano normalmente se muestra como un ciclo interminable sin causas claras. En ambos escenarios, el riesgo es que la población normalice el uso de la violencia como la única vía de resolución.</p>
+                `
+            },
+            ant2: {
+                title: "Cotidianidad y violencia en un campo de concentración nazi",
+                meta: "Autor: Rauschenberg, N. (2016)",
+                html: `
+                    <div class="modal-section-title">Palabras Clave</div>
+                    <p>Normalización histórica | Nazismo / Holocausto | Historización | Relativismo moral | Memoria colectiva | Historikerstreit</p>
+                    <div class="modal-section-title">Resumen de la Investigación</div>
+                    <p>El artículo de Nicholas Rauschenberg analiza el concept de "la normalización" aplicado a la historia del Tercer Reich y el Holocausto. El autor examina tres debates fundamentales en la historiografía alemana que surgieron cuando los historiadores intentaron tratar el periodo nazi como "un periodo más" de la historia. El problema central que plantea es si es posible analizar objetivamente un evento de violencia extrema sin caer en la desensibilización o en la reducción de su carga moral y criminal.</p>
+                    <p>La investigación detalla cómo la "normalización" puede ser vista desde dos ángulos: uno técnico, que busca entender las causas sociales y políticas de la guerra sin prejuicios; y otro político, que corre el riesgo de equiparar el Holocausto con otros crímenes masivos, diluyendo así la responsabilidad específica del régimen nazi. El texto concluye que la normalización es un proceso inevitable por el paso de las generaciones, pero que exige una vigilancia ética constante para que la comprensión histórica no se convierta en una justificación o en un olvido del trauma de las víctimas.</p>
+                    <div class="modal-section-title">Relación con el Tema de Investigación</div>
+                    <p>El texto es herramienta para criticar la tendencia a "normalizar" la violencia. Como en Alemania se debatió si el nazismo era "excepcional" o "normal", en Colombia existe un debate similar sobre si nuestro conflicto es una anomalía o una etapa del desarrollo del país. El artículo nos muestra un problema de "costumbre" social, además de mostrarlo como un fenómeno construido desde la forma en que escribimos y contamos la historia.</p>
+                `
+            },
+            ant3: {
+                title: "Funcionarios de la violencia – La violencia y su imagen en los campos de exterminio nazi",
+                meta: "Autor: Sánchez-Biosca, V. (1997)",
+                html: `
+                    <div class="modal-section-title">Palabras Clave</div>
+                    <p>Burocratización de la muerte | Campos de exterminio | Representación de la violencia | Funcionarios de la violencia | Estética del horror | Solución Final</p>
+                    <div class="modal-section-title">Resumen de la Investigación</div>
+                    <p>El texto explora la figura de los "funcionarios" en el sistema de concentración nazi, analizando cómo el exterminio fue organizado como una tarea administrativa y tecnológica. El autor examina la violencia real, señalando que los nazis utilizaron la imagen no solo para documentar, sino para deshumanizar a las víctimas y validar su sistema.</p>
+                    <p>El autor argumenta que la violencia en los campos no era un estallido de pasión irracional, sino una "violencia de oficina" ejecutada por individuos que se veían a sí mismos como simples engranajes de una máquina estatal eficiente. Esta desconexión entre el acto criminal y la conciencia del ejecutor es lo que permite que las atrocidades se procesen de manera técnica y fría.</p>
+                    <div class="modal-section-title">Relación con el Tema de Investigación</div>
+                    <p>Este artículo se relaciona en cómo aborda el concepto de la violencia burocrática como un método de normalización, mientras que el conflicto armado colombiano se muestra como algo caótico, en las guerras mundiales la normalización ocurrió a través del deber administrativo mientras que en el conflicto armado colombiano se ha convertido en una rutina “funcional” para quienes lo ejecutan.</p>
+                `
+            },
+            ant4: {
+                title: "Mayorías sin democracia. Desequilibrio de poderes y Estado de derecho en Colombia, 2002-2009",
+                meta: "Autor: García Villegas, M., & Revelo Rebolledo, J. E. (Eds.). (2009)",
+                html: `
+                    <div class="modal-section-title">Palabras Clave</div>
+                    <p>Estado de derecho | Desequilibrio de poderes | Seguridad Democrática | Institucionalidad | Excepcionalidad jurídica | Cultura política en Colombia</p>
+                    <div class="modal-section-title">Resumen de la Investigación</div>
+                    <p>Este estudio académico analiza el impacto de las políticas de gobierno en Colombia entre 2002 y 2009 sobre la división de poderes y el sistema democrático. El estudio sostiene que el contexto de conflicto armado prolongado facilitó la consolidación de mayorías políticas que, en nombre de la eficacia contra los grupos armados, debilitaron los controles judiciales y legislativos. La investigación examina cómo se produce una "erosión de la democracia" cuando el Poder Ejecutivo concentra facultades extraordinarias, justificadas por la urgencia de la guerra.</p>
+                    <p>A través de diversos capítulos, los autores demuestran que en Colombia se ha institucionalizado una forma de gobierno que bordea el autoritarismo legal, donde la Constitución se adapta para permitir la continuidad del poder y la priorización de la seguridad sobre las libertades individuales. El texto concluye que el mayor riesgo para el país no es solo el conflicto en sí, sino la degradación de las instituciones democráticas que terminan aceptando la excepcionalidad como la norma cotidiana de funcionamiento estatal.</p>
+                    <div class="modal-section-title">Relación con el Tema de Investigación</div>
+                    <p>El estudio permite abordar la normalización de la violencia desde el ámbito del derecho y el estado, este da pruebas de como el conflicto armado colombiano ha hecho que la sociedad y la justicia acepten como “normal” que los ejecutivos tengan poderes excesivos siempre que prometa ganar la guerra.</p>
+                `
+            },
+            ant5: {
+                title: "Debate de entorno a la figura de Gerardo Reichel-Dolmatoff",
+                meta: "Autor: Lomnitz, C. (2017) | Redalyc",
+                html: `
+                    <div class="modal-section-title">Palabras Clave</div>
+                    <p>Nazismo | SS (Schutzstaffel) | Banalidad del mal | Gerardo Reichel-Dolmatoff | Antropología | Memoria | Silencio | Expiación | Dignificación | Totalitarismo | Alteridad | Nacionalismo | Fascismo | Eugenismo | Ética</p>
+                    <div class="modal-section-title">Resumen de la Investigación</div>
+                    <p>El artículo de Claudio Lomnitz analiza el impacto del pasado nazi de Gerardo Reichel-Dolmatoff en la fundación de la antropología colombiana. A través de nueve tesis, el autor explora cómo la militancia de Reichel en las SS influyó en su metodología científica y en la creación de una narrativa sobre los pueblos indígenas. Se plantea que su trabajo académico funcionó como un proceso de expiación personal, donde la rigidez del pensamiento totalitario se transformó en una búsqueda de orden y pureza estética dentro de las culturas amerindias.</p>
+                    <p>Asimismo, el texto examina la complicidad de las instituciones colombianas en el ocultamiento de este pasado violento. La sociedad y la academia prefirieron mantener la imagen heroica del científico ilustre, integrando su visión del "indio" a un proyecto de identidad nacional que ignoraba las raíces ideológicas del autor. Este silencio colectivo revela cómo los sistemas de poder pueden asimilar figuras provenientes de regímenes atroces siempre que su labor técnica o intelectual sea útil para los intereses del Estado y la cohesión social.</p>
+                    <div class="modal-section-title">Relación con el Tema de Investigación</div>
+                    <p>Este artículo establece una relación directa con mi tema de la normalización de la violencia bajo regímenes políticos al demostrar cómo las lógicas de un sistema totalitario (el nazismo) pueden sobrevivir y camuflarse dentro de un sistema democrático en conflicto (Colombia). El caso de Reichel muestra que la violencia se normaliza no solo mediante el acto físico, sino a través del lenguaje científico y el silencio institucional, permitiendo que estructuras de pensamiento excluyentes se conviertan en la base del conocimiento oficial y la identidad de una nación.</p>
+                    <div class="modal-section-title">Enlace de Referencia Oficial</div>
+                    <p><a href="https://www.readalyc.org/814/81451533009/81451533009.pdf" target="_blank" class="reference-link">Ver artículo en Redalyc (PDF) →</a></p>
+                `
+            },
+            f1: {
+                title: "Ficha Bibliográfica 1: Funcionarios de la violencia",
+                meta: "Fuente: Biosca, V. S. (1997). Dialnet",
+                html: `
+                    <p><strong>Categoría Central:</strong> Violencia en la Alemania nazi</p>
+                    <div class="modal-section-title">Citas Relevantes</div>
+                    <div class="modal-quote">“El judío fue definido como un animal alojado en el cuerpo de la nación alemana para sabotearla desde dentro.” (Sánchez Biosca)</div>
+                    <div class="modal-quote">“El incendio del Reichstag sirvió como fundamento pseudolegal del terror nazi.” (Sánchez Biosca)</div>
+                    <div class="modal-quote">“Era imposible no ser testigo; casi de la noche a la mañana llegó el final para muchas comunidades judías.” (Robert Gellately)</div>
+                    <div class="modal-quote">“Alemania ya no será sólo el país de Goethe y Kant; será también el país de Auschwitz.” (Sánchez Biosca)</div>
+                    <div class="modal-quote">“Auschwitz fue el principal símbolo de la Solución Final y del exterminio industrializado.” (Sánchez Biosca)</div>
+                    <div class="modal-section-title">Palabras Clave</div>
+                    <p>Violencia burocratizada | Cosificación del ser humano | Eufemismo nazi | Exterminio como crimen de estado | Non‑lieux de la mémoire | Incomunicabilidad de Auschwitz</p>
+                    <div class="modal-section-title">Resumen</div>
+                    <p>El artículo analiza la violencia nazi como un fenómeno organizado y burocrático. Se aleja de la idea de que fue un resultado del sadismo o el odio personal. El artículo presenta el exterminio como una práctica racional técnica y administrativa. Este enfatiza en la deshumanización de las víctimas y la eliminación del contacto directo con el asesinato, a través de la tecnología, lenguaje eufemístico y división del trabajo.</p>
+                    <div class="modal-section-title">Enlace de Referencia Oficial</div>
+                    <p><a href="https://dialnet.unirioja.es/servlet/articulo?codigo=277580" target="_blank" class="reference-link">Ver indexación en Dialnet →</a></p>
+                `
+            },
+            f2: {
+                title: "Ficha Bibliográfica 2: Civilización y violencia",
+                meta: "Fuente: Dialnet Métricas (Elias, N., 1987)",
+                html: `
+                    <p><strong>Categoría Central:</strong> Violencia en la Alemania nazi</p>
+                    <div class="modal-section-title">Citas Relevantes</div>
+                    <div class="modal-quote">“La pregunta no debería ser por qué los hombres se matan unos a otros, sino cómo es posible que convivan pacíficamente.” (Norbert Elias)</div>
+                    <div class="modal-quote">“Los Estados se caracterizan por un monopolio de la violencia física.” (Norbert Elias)</div>
+                    <div class="modal-quote">“El monopolio de la violencia es un invento humano, como otros inventos técnicos.” (Norbert Elias)</div>
+                    <div class="modal-quote">“La pacificación se ha interiorizado, al igual que lo ha hecho la estructura de nuestra personalidad.” (Norbert Elias)</div>
+                    <div class="modal-quote">“En las relaciones interestatales vivimos básicamente como en el estado de naturaleza.” (Norbert Elias)</div>
+                    <div class="modal-quote">“La desesperación por el arrebatamiento de aquello que daba sentido a la vida es la madre de la violencia.” (Norbert Elias)</div>
+                    <div class="modal-section-title">Palabras Clave</div>
+                    <p>Monopolio estatal de la violencia | Guerra y hegemonía | Violencia Política | Romantización de la violencia | Burguesía | República de Weimar | Terrorismo</p>
+                    <div class="modal-section-title">Resumen</div>
+                    <p>Norbert Elias explica que la convivencia pacífica en la sociedad no es natural, sino el resultado de un proceso histórico al que llamó civilización. En este proceso, el Estado logra concentrar el monopolio de la violencia, lo que reduce los conflictos directos entre individuos y obliga a desarrollar autocontrol y disciplina en el comportamiento social. Sin embargo, este equilibrio es frágil y puede romperse en situaciones de crisis social, política o económica.</p>
+                    <p>Elias muestra que la violencia extrema, como la del nazismo, surge cuando se desestabilizan las estructuras sociales, generando frustración, pérdida de sentido y condiciones que favorecen el uso masivo de la violencia.</p>
+                    <div class="modal-section-title">Enlace de Referencia Oficial</div>
+                    <p><a href="https://dialnet.unirioja.es/metricas/documentos/ARTREV/767505" target="_blank" class="reference-link">Ver métricas de la obra en Dialnet →</a></p>
+                `
+            },
+            f3: {
+                title: "Ficha Bibliográfica 3: La Alemania nazi",
+                meta: "Fuente: Núñez Fernández, P. La Alemania Nazi.",
+                html: `
+                    <p><strong>Categoría Central:</strong> Violencia en la Alemania nazi</p>
+                    <div class="modal-section-title">Citas Relevantes</div>
+                    <div class="modal-quote">“El judío fue definido como un animal alojado en el cuerpo de la nación alemana para sabotearla desde dentro.” (Patricia Núñez Fernández)</div>
+                    <div class="modal-quote">“El incendio del Reichstag sirvió como fundamento pseudolegal del terror nazi.” (Patricia Núñez Fernández)</div>
+                    <div class="modal-quote">“Era imposible no ser testigo; casi de la noche a la mañana llegó el final para muchas comunidades judías.” (Robert Gellately)</div>
+                    <div class="modal-quote">“El pogromo de noviembre fue la última oportunidad para la violencia callejera.” (Raul Hilberg)</div>
+                    <div class="modal-quote">“Auschwitz fue el principal símbolo de la Solución Final y del exterminio industrializado.” (Patricia Núñez Fernández)</div>
+                    <div class="modal-quote">“Disfrutaba decidiendo quién vivía y quién moría…” Sobre Josef Mengele (Patricia Núñez Fernández)</div>
+                    <div class="modal-section-title">Palabras Clave</div>
+                    <p>Propaganda nazi | Antisemitismo | Campo de exterminio | Campos de concentración | Crisis económica y social | Josef Mengele | Deshumanización</p>
+                    <div class="modal-section-title">Resumen</div>
+                    <p>El texto describe cómo el nazismo surge en Alemania tras la crisis política, económica y social posterior a la Primera Guerra Mundial. Hitler y el Partido Nazi aprovecharon el descontento social, utilizando propaganda, nacionalismo y antisemitismo para consolidar su poder y debilitar la democracia.</p>
+                    <p>La persecución contra los judíos ocurrió de forma progresiva, pasando de la discriminación legal a la violencia abierta, hasta llegar a la Solución Final. Los campos de concentración y exterminio representaron la culminación de un sistema de violencia organizada, donde millones de personas fueron deshumanizadas y asesinadas industrialmente.</p>
+                `
+            },
+            f4: {
+                title: "Ficha Bibliográfica 4: Asesinatos en masa y genocidio entre 1941 & 1945: un intento de análisis comparativo",
+                meta: "Fuente: Kramer, A. (2009). Ayer, (76), 177–205.",
+                html: `
+                    <p><strong>Categoría Central:</strong> Violencia en la Alemania nazi</p>
+                    <div class="modal-section-title">Citas Relevantes</div>
+                    <div class="modal-quote">“La Primera Guerra Mundial marcó una ruptura en la forma de hacer la guerra, incorporando a la población civil como objetivo.” (Alan Kramer)</div>
+                    <div class="modal-quote">“La violencia del siglo XX fue el resultado de la combinación entre guerra, ideología y tecnología.” (Alan Kramer)</div>
+                    <div class="modal-quote">“El genocidio nazi representó una forma radical de guerra ideológica que buscaba la eliminación total del enemigo.” (Alan Kramer)</div>
+                    <div class="modal-quote">“La Segunda Guerra Mundial intensificó las prácticas de exterminio hasta convertirlas en políticas sistemáticas.” (Alan Kramer)</div>
+                    <div class="modal-quote">“La violencia no fue accidental, sino organizada y dirigida desde el Estado.” (Alan Kramer)</div>
+                    <div class="modal-section-title">Palabras Clave</div>
+                    <p>Genocidio | Asesinatos en masa | Ideología extrema | Europa (1914-1945) | Radicalización de la violencia | Guerras ideológicas</p>
+                    <div class="modal-section-title">Resumen</div>
+                    <p>El texto analiza cómo la violencia masiva en el siglo XX, especialmente entre 1914 y 1945, se transformó debido a la guerra moderna, las ideologías extremas y el uso de nuevas tecnologías. La Primera Guerra Mundial marcó un punto de ruptura al introducir la guerra total, donde también los civiles se convirtieron en víctimas, lo que abrió el camino a formas más sistemáticas de violencia.</p>
+                    <p>En este contexto, el nazismo llevó la violencia a su nivel más extremo mediante una política de exterminio planificada. A diferencia de otros conflictos, el régimen nazi desarrolló una guerra ideológica basada en la eliminación total de grupos considerados enemigos. Así, el genocidio se convirtió en un proceso organizado, racional y dirigido por el Estado.</p>
+                    <div class="modal-section-title">Enlace de Referencia Oficial</div>
+                    <p><a href="http://www.jstor.org/stable/41326045" target="_blank" class="reference-link">Ver repositorio en JSTOR →</a></p>
+                `
+            },
+            f5: {
+                title: "Ficha Bibliográfica 5: El ascenso de Hitler y del partido Nazi al poder en Alemania",
+                meta: "Fuente: Álvarez, B. C. (2015). Dialnet.",
+                html: `
+                    <p><strong>Categoría Central:</strong> Influencia del poder político en la Alemania nazi</p>
+                    <div class="modal-section-title">Citas Relevantes</div>
+                    <div class="modal-quote">“El ascenso de Hitler y su partido nazi al poder se debió a una serie de circunstancias económicas y sociales.” (Benedicto Cuervo Álvarez)</div>
+                    <div class="modal-quote">“El índice de desempleo superaba el 30% y la miseria y el hambre se apoderaban del país.” (Benedicto Cuervo Álvarez)</div>
+                    <div class="modal-quote">“Sin la aplicación sistemática del terror por las principales calles de las ciudades alemanas, Hitler difícilmente podría haber alcanzado el poder.” (Benedicto Cuervo Álvarez)</div>
+                    <div class="modal-quote">“Hitler disolvió el parlamento y utilizó el incendio del Reichstag para instituir el estado de excepción.” (Benedicto Cuervo Álvarez)</div>
+                    <div class="modal-quote">“La gran empresa contribuyó a socavar la República de Weimar mediante su apoyo al partido nazi.” (Benedicto Cuervo Álvarez)</div>
+                    <div class="modal-quote">“Se pretendía acabar con la Constitución y la República de Weimar, y para ello era imprescindible tener a Hitler.” (Benedicto Cuervo Álvarez)</div>
+                    <div class="modal-quote">“Una vez instalado en el poder, le bastaron unos pocos meses para establecer una dictadura absoluta.” (Benedicto Cuervo Álvarez)</div>
+                    <div class="modal-quote">“El terror es el más eficaz entre todos los instrumentos políticos.” (Adolf Hitler)</div>
+                    <div class="modal-section-title">Palabras Clave</div>
+                    <p>Poder político | Nazismo | Dictadura | República de Weimar | Crisis económica | Totalitarismo | Hitler | Partido nazi (NSDAP) | Control del Estado | Eliminación de la oposición</p>
+                    <div class="modal-section-title">Resumen</div>
+                    <p>El artículo explica cómo Hitler y el Partido nazi llegaron al poder aprovechando la crisis económica, política y social de la Alemania de posguerra. La debilidad de la República de Weimar, el desempleo masivo y el miedo al comunismo facilitaron que amplios sectores de la sociedad apoyaran opciones autoritarias. Además, Hitler logró el respaldo de élites económicas y políticas, lo que le permitió consolidar su influencia.</p>
+                    <p>Una vez en el poder, Hitler utilizó mecanismos políticos y legales junto con la violencia para establecer una dictadura totalitaria. Eliminó la oposición, controló las instituciones del Estado, manipuló las elecciones y utilizó el terror mediante las SA y SS. Así, el poder político en la Alemania nazi se convirtió en un instrumento central para controlar la sociedad y consolidar el régimen.</p>
+                    <div class="modal-section-title">Enlace de Referencia Oficial</div>
+                    <p><a href="https://dialnet.unirioja.es/servlet/articulo?codigo=5152855" target="_blank" class="reference-link">Ver artículo en Dialnet →</a></p>
+                `
+            },
+            f6: {
+                title: "Ficha Bibliográfica 6: Ubicación del fascismo de la Alemania nazi dentro del espectro político de la extrema derecha. Un análisis desde la historia, la política y el derecho",
+                meta: "Fuente: Díez Castaño, J. F. (2020). Dialnet.",
+                html: `
+                    <p><strong>Categoría Central:</strong> Influencia del poder político en la Alemania nazi</p>
+                    <div class="modal-section-title">Citas Relevantes</div>
+                    <div class="modal-quote">“El régimen fascista alemán se aleja completamente de las corrientes ideológicas de izquierda.” (Juan Felipe Díez Castaño)</div>
+                    <div class="modal-quote">“El partido nazi se vio respaldado por los sectores más conservadores de la época.” (Juan Felipe Díez Castaño)</div>
+                    <div class="modal-quote">“El régimen se valió de su posición en el gobierno para censurar y perseguir a los sectores de izquierda.” (Juan Felipe Díez Castaño)</div>
+                    <div class="modal-quote">“El nacional socialismo fue un movimiento que surgió como reacción contra la izquierda política.” (Juan Felipe Díez Castaño)</div>
+                    <div class="modal-quote">“Los nazis desdeñaban claramente el parlamentarismo y la democracia liberal.” (Juan Felipe Díez Castaño)</div>
+                    <div class="modal-quote">“El ejecutivo se abrogaba la competencia de producir normas jurídicas con fuerza de ley.” (Juan Felipe Díez Castaño)</div>
+                    <div class="modal-quote">“El partido comunista y los socialdemócratas fueron perseguidos y declarados fuera de la ley.” (Juan Felipe Díez Castaño)</div>
+                    <div class="modal-quote">“La dictadura nazi implicó la destrucción del Estado de derecho y la democracia.” (Juan Felipe Díez Castaño)</div>
+                    <div class="modal-section-title">Palabras Clave</div>
+                    <p>Extrema derecha | Fascismo | Nazismo | Poder político | Totalitarismo | Persecución política | Burguesía | Anticomunismo | Control jurídico</p>
+                    <div class="modal-section-title">Resumen</div>
+                    <p>El artículo explica que el régimen nazi debe ubicarse claramente en la extrema derecha del espectro político, ya que se opuso completamente a ideologías de izquierda como el socialismo y el comunismo. El nazismo contó con el apoyo de sectores conservadores y de la burguesía alemana, quienes se beneficiaron económicamente del régimen y respaldaron su consolidación en el poder.</p>
+                    <p>Una vez en el poder, el régimen nazi utilizó el sistema político y jurídico para eliminar la oposición, especialmente a partidos de izquierda, mediante persecución legal, represión y censura. Además, destruyó el Estado de derecho y la democracia, concentrando el poder en el Estado y subordinando a la sociedad bajo un modelo autoritario y totalitario.</p>
+                    <div class="modal-section-title">Enlace de Referencia Oficial</div>
+                    <p><a href="https://dialnet.unirioja.es/servlet/articulo?codigo=7771978" target="_blank" class="reference-link">Ver registro académico en Dialnet →</a></p>
+                `
+            },
+            f7: {
+                title: "Ficha Bibliográfica 7: La mixofobia como política de Estado en la Alemania Nazi",
+                meta: "Fuente: Rodríguez-García, D. (2014). Dialnet.",
+                html: `
+                    <p><strong>Categoría Central:</strong> Influencia del poder político en la Alemania nazi</p>
+                    <div class="modal-section-title">Citas Relevantes</div>
+                    <div class="modal-quote">“La mixofobia se utilizó como política de Estado durante la Alemania nazi.” (Dan Rodríguez‑García)</div>
+                    <div class="modal-quote">“La ideología nazi condujo a la legislación anti‑mestizaje dirigida principalmente a la población judía.” (Dan Rodríguez‑García)</div>
+                    <div class="modal-quote">“El mestizaje fue considerado una amenaza para el orden socio‑político del Estado.” (Dan Rodríguez‑García)</div>
+                    <div class="modal-quote">“El régimen utilizó la legislación para prohibir matrimonios y relaciones entre grupos considerados distintos.” (Dan Rodríguez‑García)</div>
+                    <div class="modal-quote">“La política de población nazi estaba basada en una ideología racista y biologicista.” (Dan Rodríguez‑García)</div>
+                    <div class="modal-quote">“La preservación de la raza aria exigía evitar la mezcla con razas consideradas inferiores.” (Dan Rodríguez‑García)</div>
+                    <div class="modal-quote">“El Estado nazi clasificó a la población según criterios raciales para aplicar su política.” (Dan Rodríguez‑García)</div>
+                    <div class="modal-quote">“La legislación sirvió como legitimación de los intereses socio‑políticos del Estado.” (Dan Rodríguez‑García)</div>
+                    <div class="modal-section-title">Palabras Clave</div>
+                    <p>Mixofobia | Racismo | Estado totalitario | Ideología racial | Leyes de Núremberg | Exclusión social | Discriminación | Judíos | Política de Estado</p>
+                    <div class="modal-section-title">Resumen</div>
+                    <p>El artículo analiza cómo el Estado nazi utilizó la ideología racial para implementar una política de exclusión basada en el rechazo al mestizaje o “mixofobia”. A través de leyes y categorías sociales como “mischling”, el régimen nazi clasificó a la población y estableció jerarquías raciales con el objetivo de preservar la supuesta pureza de la raza aria. El poder político del Estado nazi se utilizó para imponer estas ideas mediante legislación, control social y políticas de población, sirviendo para legitimar la exclusión y mantener el orden del régimen totalitario.</p>
+                    <div class="modal-section-title">Enlace de Referencia Oficial</div>
+                    <p><a href="https://dialnet.unirioja.es/servlet/articulo?codigo=5243875" target="_blank" class="reference-link">Ver artículo en Dialnet →</a></p>
+                `
+            },
+            f8: {
+                title: "Ficha Bibliográfica 8: La construcción cinematográfica del enemigo en la Alemania nazi",
+                meta: "Fuente: Pinzón Olarte, I. N. (2017). Dialnet.",
+                html: `
+                    <p><strong>Categoría Central:</strong> Influencia del poder político en la Alemania nazi</p>
+                    <div class="modal-section-title">Citas Relevantes</div>
+                    <div class="modal-quote">“La propaganda cinematográfica construyó la imagen del enemigo judío mediante el fomento de emociones como la rabia y el asco.” (Ivonne Natacha Pinzón Olarte)</div>
+                    <div class="modal-quote">“La propaganda adquirió fuerza en la política cuando el pensamiento totalitario pretendió dominar la vida de los individuos.” (Ivonne Natacha Pinzón Olarte)</div>
+                    <div class="modal-quote">“Creamos el Tercer Reich por medio de la propaganda.” (Joseph Goebbels)</div>
+                    <div class="modal-quote">“La propaganda se convirtió en una estrategia para construir al enemigo en la Alemania nazi.” (Ivonne Natacha Pinzón Olarte)</div>
+                    <div class="modal-quote">“Los nazis lograron influir en la sociedad apelando a las emociones más que a la razón.” (Ivonne Natacha Pinzón Olarte)</div>
+                    <div class="modal-quote">“La propaganda cinematográfica fue un dispositivo capaz de controlar conductas, opiniones y acciones.” (Ivonne Natacha Pinzón Olarte)</div>
+                    <div class="modal-quote">“El propósito era influir en las masas para que aceptaran las ideas del régimen.” (Ivonne Natacha Pinzón Olarte)</div>
+                    <div class="modal-quote">“Se construyó un enemigo que reunía todos los peligros para justificar el régimen.” (Ivonne Natacha Pinzón Olarte)</div>
+                    <div class="modal-section-title">Palabras Clave</div>
+                    <p>Manipulación | Psicopolítica | Goebbels | Medios de comunicación | Sociedad de masas | Enemigo | Judíos</p>
+                    <div class="modal-section-title">Resumen</div>
+                    <p>El artículo analiza cómo el régimen nazi utilizó la propaganda cinematográfica como una herramienta política para influir en la población. A través del cine, se construyó la imagen del judío como enemigo, fomentando emociones como el odio y la repugnancia, lo que ayudó a justificar las acciones del régimen y fortalecer la ideología nazi. El poder político nazi empleó el cine como un dispositivo de control psicopolítico, capaz de manipular pensamientos, emociones y comportamientos de las masas.</p>
+                    <div class="modal-section-title">Enlace de Referencia Oficial</div>
+                    <p><a href="https://dialnet.unirioja.es/servlet/articulo?codigo=6760581" target="_blank" class="reference-link">Ver investigación en Dialnet →</a></p>
+                `
+            },
+            f9: {
+                title: "Ficha Bibliográfica 9: Desde la vergüenza y la humillación hacia una pedagogía de la aceptación y la dignidad humana",
+                meta: "Fuente: Marks, S. (2008).",
+                html: `
+                    <p><strong>Categoría Central:</strong> Aceptación social de la violencia</p>
+                    <div class="modal-section-title">Citas Relevantes</div>
+                    <div class="modal-quote">“La vergüenza es el miedo a ser excluido de la sociedad.” (Stephan Marks)</div>
+                    <div class="modal-quote">“A través de la violencia se transforma la impotencia en poder.” (Stephan Marks)</div>
+                    <div class="modal-quote">“Las personas pueden humillar a otros para no sentir su propia vergüenza.” (Stephan Marks)</div>
+                    <div class="modal-quote">“La humillación y la vergüenza son materiales del poder y la dominación.” (Stephan Marks)</div>
+                    <div class="modal-quote">“Humillar permite ganar poder sobre otros.” (Stephan Marks)</div>
+                    <div class="modal-quote">“La vergüenza interiorizada puede llevar a comportamientos violentos.” (Stephan Marks)</div>
+                    <div class="modal-quote">“La violencia puede convertirse en un ciclo de vergüenza y agresión.” (Stephan Marks)</div>
+                    <div class="modal-quote">“La humillación puede institucionalizarse como parte de la cultura social.” (Stephan Marks)</div>
+                    <div class="modal-section-title">Palabras Clave</div>
+                    <p>Verg&uuml;enza | Humillación | Violencia | Aceptación social | Poder | Exclusión social | Dominación</p>
+                    <div class="modal-section-title">Resumen</div>
+                    <p>El texto analiza cómo la vergüenza y la humillación influyen profundamente en el comportamiento humano y en las relaciones sociales. La vergüenza puede generar sentimientos de inferioridad, exclusión y pérdida de valor personal, lo que lleva a los individuos a desarrollar mecanismos de defensa para proteger su identidad. Entre estos mecanismos se encuentra la violencia, que se utiliza como una forma de transformar la impotencia en poder y restaurar el honor perdido. A nivel social, la humillación puede convertirse en una estructura de poder que legitima la agresión, facilitando la aceptación de la violencia tanto en relaciones individuales como en contextos colectivos.</p>
+                `
+            },
+            f10: {
+                title: "Ficha Bibliográfica 10: Representaciones Sociales de la Segunda Guerra Mundial: Valores y Dominancia social",
+                meta: "Fuente: Sosa, F. M., Natapof, D. G., & Zubieta, E. M. (2017). Revista Psicodebate.",
+                html: `
+                    <p><strong>Categoría Central:</strong> Aceptación social de la violencia</p>
+                    <div class="modal-section-title">Citas Relevantes</div>
+                    <div class="modal-quote">“La Segunda Guerra Mundial se representa con centralidad en la muerte y la destrucción.” (Sosa, Natapof & Zubieta)</div>
+                    <div class="modal-quote">“Los eventos más recordados de la historia están relacionados con guerras y violencia.” (Sosa, Natapof & Zubieta)</div>
+                    <div class="modal-quote">“La Segunda Guerra Mundial es considerada una catástrofe social.” (Sosa, Natapof & Zubieta)</div>
+                    <div class="modal-quote">“Algunos participantes consideran la guerra como justa o necesaria.” (Sosa, Natapof & Zubieta)</div>
+                    <div class="modal-quote">“El sesgo bélico muestra que la historia se recuerda principalmente a través de conflictos.” (Sosa, Natapof & Zubieta)</div>
+                    <div class="modal-quote">“Los conflictos generan emociones profundas que favorecen su recuerdo colectivo.” (Sosa, Natapof & Zubieta)</div>
+                    <div class="modal-quote">“Las representaciones sociales influyen en actitudes, valores y conductas.” (Sosa, Natapof & Zubieta)</div>
+                    <div class="modal-quote">“La violencia aparece como un elemento central en la memoria histórica.” (Sosa, Natapof & Zubieta)</div>
+                    <div class="modal-section-title">Palabras Clave</div>
+                    <p>Guerra | Memoria colectiva | Representaciones sociales | Segunda Guerra Mundial | Muerte | Catástrofe social | Justificación de la violencia | Percepción social</p>
+                    <div class="modal-section-title">Resumen</div>
+                    <p>El artículo analiza cómo las sociedades construyen representaciones sobre la Segunda Guerra Mundial, destacando que la violencia, la muerte y el sufrimiento ocupan un lugar central en la memoria colectiva. Se evidencia que los eventos históricos más recordados suelen estar relacionados con guerras, lo que demuestra la importancia de la violencia en la construcción de la historia social. A pesar de reconocer la guerra como una catástrofe, algunas personas también la interpretan como necesaria o justa, lo que refleja una posible aceptación social de la violencia en ciertos contextos.</p>
+                `
+            },
+            f11: {
+                title: "Ficha Bibliográfica 11: La obediencia civil durante la Alemania nacionalsocialista (1933-1945)",
+                meta: "Fuente: Alvéstegui, A. (2016). Cuadernos Judaicos.",
+                html: `
+                    <p><strong>Categoría Central:</strong> Aceptación social de la violencia</p>
+                    <div class="modal-section-title">Citas Relevantes</div>
+                    <div class="modal-quote">“Se trataba de una complicidad silenciosa que permitía la adopción de la crueldad como un medio legítimo.” (Ariel Alvéstegui)</div>
+                    <div class="modal-quote">“La norma en la Alemania nazi fue el acatamiento y la obediencia civil.” (Ariel Alvéstegui)</div>
+                    <div class="modal-quote">“La obediencia civil implica la modificación del comportamiento para someterse a la autoridad.” (Ariel Alvéstegui)</div>
+                    <div class="modal-quote">“Muchos apoyaban el régimen por convencimiento ideológico.” (Ariel Alvéstegui)</div>
+                    <div class="modal-quote">“Otros aceptaban el régimen por miedo y para evitar castigos.” (Ariel Alvéstegui)</div>
+                    <div class="modal-quote">“El miedo paralizaba a la población y favorecía la aceptación del sistema.” (Ariel Alvéstegui)</div>
+                    <div class="modal-quote">“El interés egoísta y la indiferencia facilitaron la obediencia.” (Ariel Alvéstegui, citando a Adorno)</div>
+                    <div class="modal-quote">“La propaganda preparó el camino para aceptar la violencia y el exterminio.” (Ariel Alvéstegui)</div>
+                    <div class="modal-section-title">Palabras Clave</div>
+                    <p>Miedo | Propaganda | Conformidad social | Totalitarismo | Complicidad | Genocidio | Autoridad</p>
+                    <div class="modal-section-title">Resumen</div>
+                    <p>El artículo analiza la obediencia civil en la Alemania nazi y explica cómo la mayoría de la población aceptó el régimen, incluso cuando este ejercía violencia extrema y violaba los derechos humanos. Esta aceptación se debió a múltiples factores sociales, políticos y psicológicos que influyeron en el comportamiento colectivo, generando conformidad y adaptación al sistema. La violencia fue tolerada y normalizada por la sociedad debido al miedo, la propaganda, el oportunismo y la presión social.</p>
+                `
+            },
+            f12: {
+                title: "Ficha Bibliográfica 12: La mixofobia como política de Estado en la Alemania Nazi (Control Social)",
+                meta: "Fuente: García, D. R. (2014). Revista de Demografía Histórica.",
+                html: `
+                    <p><strong>Categoría Central:</strong> Aceptación social de la violencia</p>
+                    <div class="modal-section-title">Citas Relevantes</div>
+                    <div class="modal-quote">“La mixofobia se utilizó como política de Estado en la Alemania nazi.” (Dan Rodríguez‑García)</div>
+                    <div class="modal-quote">“La ideología nazi condujo a una legislación dirigida contra la población judía.” (Dan Rodríguez‑García)</div>
+                    <div class="modal-quote">“La mezcla racial fue considerada una amenaza para el orden del Estado.” (Dan Rodríguez‑García)</div>
+                    <div class="modal-quote">“La legislación sirvió para legitimar intereses socio‑políticos del Estado.” (Dan Rodríguez‑García)</div>
+                    <div class="modal-quote">“Se construyeron categorías raciales para aplicar la política del régimen.” (Dan Rodríguez‑García)</div>
+                    <div class="modal-quote">“La pureza racial era vista como condición para la supervivencia del pueblo.” (Dan Rodríguez‑García)</div>
+                    <div class="modal-quote">“El mestizaje fue considerado como destrucción de la nación.” (Dan Rodríguez‑García)</div>
+                    <div class="modal-quote">“La exclusión fue utilizada como mecanismo político y social.” (Dan Rodríguez‑García)</div>
+                    <div class="modal-section-title">Palabras Clave</div>
+                    <p>Genocidio | Pureza racial | Política de Estado | Judíos | Eugenesia | Exclusión social</p>
+                    <div class="modal-section-title">Resumen</div>
+                    <p>El artículo analiza cómo la ideología nazi utilizó el rechazo a la mezcla racial como una política de Estado, estableciendo leyes y normas que promovían la exclusión y discriminación de ciertos grupos, especialmente los judíos. Estas políticas se basaban en teorías racistas y justificaban la superioridad de la “raza aria”. La violencia contra estos grupos se legitimó mediante legislación, propaganda e ideología, lo que permitió que la sociedad aceptara prácticas como la segregación, la esterilización y el exterminio.</p>
+                    <div class="modal-section-title">Enlace de Referencia Oficial</div>
+                    <p><a href="https://dialnet.unirioja.es/servlet/articulo?codigo=5243875" target="_blank" class="reference-link">Ver registro de Demografía en Dialnet →</a></p>
+                `
+            },
+            marco1: {
+                title: "Categoría I: Violencia en la Alemania nazi",
+                meta: "Sección 1 del Marco Referencial Técnico",
+                html: `
+                    <p>La violencia extrema del siglo XX no fue un hecho planeado, sino que fue el resultado de los cambios en las dinámicas de la guerra moderna. Como menciona Kramer (2009), la Primera Guerra Mundial generó un cambio radical al incluir a la población civil como objetivo militar, cambiando a una violencia sistemática guiada por la combinación entre guerra, ideología y tecnología. En Alemania, este entorno de deshumanización facilitó el derrumbe de la República de Weimar. Cuervo Álvarez (2015) menciona que una crisis económica severa, con un desempleo superior al 30%, la pobreza y el hambre, creó el escenario perfecto para la aceptación de ideologías extremistas. Sin embargo, el control total no fue solo electoral, el autor recalca que no se hubiera podido haber desarrollado sin la aplicación sistemática del terror. Sucesos como el incendio del Reichstag funcionaron como trucos legales para tener control total del gobierno. Desde la perspectiva jurídica, Díez Castaño (2020) sitúa al nazismo en la extrema derecha como una reacción contra la izquierda política, se respaldada por los sectores más conservadores y la burguesía. Al asumir el gobierno la responsabilidad de producir normas con fuerza de ley, se destruyó el Estado de derecho, prohibiendo y encarcelando a la oposición.</p>
+                `
+            },
+            marco2: {
+                title: "Categoría II: Influencia del poder político en la Alemania nazi",
+                meta: "Sección 2 del Marco Referencial Técnico",
+                html: `
+                    <p>Desde el punto de vista jurídico, Díez Castaño (2020) situó al nazismo dentro de la derecha extrema como un despliegue en respuesta a la política izquierdista que, al obtener el gobierno, creó leyes vinculantes e infligió la destrucción del Estado de derecho. Tras el ascenso al poder, este componente político del poder transformó su presencia en violencia burocrática y técnica que, como explica Biosca (1997), hizo imposible que el asesinato fuera una mala acción moral (Biosca, Gellately, 1997). Esa persecución gradual fue una evidencia como subraya Núñez Fernández (2012). Hilberg (2005) señaló que el pogromo de noviembre condujo a una destrucción industrializada en Auschwitz gracias a un control biopolítico rigoroso. En efecto, el Estado recurso a herramientas como las Leyes de Núremberg para restringir matrimonios interraciales y defender la "puraza aria" (Rodríguez-García, 2014), como medio para justificar dichas exclusiones. También recurrió a un sistema de dominación que, en ese proceso, Joseph Goebbels manipuló las emociones colectivas mediante la propaganda con el propósito de dar justificación a su masacre (Pinzón Olarte, 2017). </p>
+                `
+            },
+            marco3: {
+                title: "Categoría III: Aceptación social de la violencia",
+                meta: "Sección 3 del Marco Referencial Técnico",
+                html: `
+                    <p>Está violencia gubernamental, en términos sociológicos, resultó en una interrupción de la paz durante momentos críticos y un estallido de conductas colectivas desordenadas (Elias, 1987). El componente emocional humano ante el terrorismo fue fundamental para lograr esta extinción; en el plano individual, Marks (2008) argumenta que el temor a perder pertenencia fomenta una sensación de debilidad que la población intenta sobreponerse a través de acciones de violencia, mientras que en el plano grupal, Sosa, Natapof y Zubieta (2017) señalan que hay representaciones culturales de la muerte en nuestra memoria colectiva que hacen familiar al horror extremo. Por último, Alvéstegui (2016) clasifica el apoyo social como un hecho complaciente derivado de la moral pasiva e intereses egocéntricos que han legitimado el terror y desmantelado la red de relaciones comunitarias. Esto, en relación con Gellately (2002), demuestra que en ese escenario social era prácticamente inimaginable que nadie pudiera no ser parte de un espectador de la trágica conclusión de las poblaciones judías. </p>
+                `
+            },
+            res1: {
+                title: "Resultado 1: Historia de vida de Paquita Sitzer",
+                meta: "Evidencia cualitativa | Sobreviviente del Holocausto",
+                html: `<p>Paquita Sitzer, nacida Françoise Bielinsky en 1937, vivió un exodo continuo por Europa: atraveso la Francia ocupada, cruzo a pie los Pirineos hacia España en 1942 y posteriormente se reasento en Venezuela. El uso de documentos falsos fue un mecanismo de supervivencia ante la xenofobia institucional. Su relato tambien muestra el papel decisivo de redes de solidaridad, como la comunidad de Les y su benefactor Victor Mespleson, quien murio en un campo de concentracion.</p>`
+            },
+            res2: {
+                title: "Resultado 2: Historia de vida de Albert Barbouth",
+                meta: "Evidencia cualitativa | Paris, 1933",
+                html: `<p>El testimonio de Albert Barbouth evidencia la implementacion gradual de la exclusion social mediante decretos. Registra la perdida de su padre, la deportacion de su madre al campo de transito de Drancy y la imposicion de la estrella amarilla. Las prohibiciones sobre bicicletas, radios, horarios de compra y acceso a espacios publicos muestran como la violencia politica se incorporo a la vida cotidiana mediante reglas administrativas.</p>`
+            },
+            res3: {
+                title: "Resultado 3: Historia de vida de Charlotte Gunberg",
+                meta: "Evidencia cualitativa | Infancia y clandestinidad",
+                html: `<p>Charlotte Gunberg tenia ocho anos cuando fue perseguida. Las deportaciones se comunicaban mediante citaciones oficiales que ordenaban el traslado a supuestos trabajos forzados. La expulsion de los ninos judios de las aulas desintegro su entorno escolar y obligo a su familia a vivir tres anos en la clandestinidad entre Belgica y Francia. El distanciamiento fisico al caminar se convirtio en un protocolo para evitar la captura.</p>`
+            },
+            res4: {
+                title: "Resultado 4: Historia de vida de Irene Sashar",
+                meta: "Evidencia cualitativa | Gueto de Varsovia",
+                html: `<p>Irene Sashar, nacida en Varsovia en 1937, sobrevivio junto a su madre en el Gueto de Varsovia tras la muerte de su padre. Permanecio escondida durante casi tres anos en espacios oscuros, reducidos y nocivos. Su experiencia muestra como el silencio absoluto, el encierro y la amenaza de ejecucion transformaron la privacion fisica en una condicion habitual de la infancia bajo el terror de Estado.</p>`
+            },
+            res5: {
+                title: "Resultado 5: Analisis documental de Operacion Barbarroja",
+                meta: "National Geographic / Disney+ | Isabelle Clarke y Daniel Costelle, 2022",
+                html: `<p>El documental registro indicadores de la maquinaria belica e ideologica del Frente Oriental: 200.000 soldados finlandeses, 60.000 italianos y 45.000 espanoles movilizados; 2.000 soldados incorporados por coercion a las SS; cerca de 4.000 aviones sovieticos destruidos en las primeras fases; mas de 400.000 prisioneros capturados cerca de Smolensk y Kiev; y 33.771 personas judias asesinadas en Babi Yar los dias 29 y 30 de septiembre de 1941.</p>`
+            },
+            res6: {
+                title: "Resultado 6: Registros poblacionales y mortalidad",
+                meta: "Evidencia documental e historiografica | Segundo objetivo especifico",
+                html: `<p>Los hallazgos muestran una relacion entre la sofisticacion burocratica y la capacidad de persecucion. En Paises Bajos, un registro civil unificado y centralizado, apoyado en tarjetas perforadas Hollerith de Dehomag, permitio identificar y arrestar aproximadamente al 75% de la poblacion judia. En Francia y Belgica, los registros mas fragmentados se asociaron con tasas de mortalidad aproximadas entre el 25% y el 40%, pues dejaron mayores posibilidades de evasion, ocultamiento y falsificacion de documentos.</p>`
+            },
+            analisis1: {
+                title: "Analisis 1: De la exclusion cotidiana a la aniquilacion",
+                meta: "Categoria 1 | Violencia en la Alemania nazi",
+                html: `<p>La violencia opero en niveles conectados. Primero aparecio como segregacion legal, con perdida del estatus ciudadano y derechos civiles. Luego avanzo hacia el encierro en guetos y la deportacion bajo engaño administrativo. En el Frente Oriental se transformo en una guerra de aniquilamiento, y Babi Yar evidencio el paso de la represion a un proceso sistematico ejecutado por unidades especializadas.</p>`
+            },
+            analisis2: {
+                title: "Analisis 2: Poder politico y eficiencia tecnologica",
+                meta: "Categoria 2 | Burocracia, registros y control",
+                html: `<p>El poder nazi no dependio solo de la fuerza militar. Transformo instituciones, leyes y tecnologias de procesamiento de datos en instrumentos de persecucion. La precision de los censos facilito identificar victimas y automatizar decisiones. El resultado demuestra que la modernidad y la racionalidad, separadas de principios eticos, pueden optimizar la destruccion.</p><p>La coercion tambien elimino frenos individuales y juridicos, como muestra el reclutamiento forzado y la promulgacion de directivas que eximian de responsabilidad penal a combatientes en el Frente Oriental.</p>`
+            },
+            analisis3: {
+                title: "Analisis 3: Aceptacion social y deshumanizacion",
+                meta: "Categoria 3 | Obediencia, propaganda y pasividad",
+                html: `<p>La violencia no se normalizo sin la pasividad o complicidad del entorno. Pequenos decretos hicieron cotidiana la exclusion: prohibir la escuela, las bicicletas o las compras en determinados horarios fracturo el marco moral de la comunidad. La propaganda presento a las victimas como una amenaza y redujo la empatia. Sin embargo, los relatos de Paquita Sitzer e Irene Sashar tambien muestran redes clandestinas de solidaridad y resiliencia.</p>`
+            },
+            analisis4: {
+                title: "Analisis 4: El cortometraje como prototipo",
+                meta: "Artes y Tecnologia | Socializacion de resultados",
+                html: `<p>El cortometraje convierte los datos y testimonios en una narrativa pedagogica. Desde Artes, personifica cifras como la masacre de Babi Yar y las estadisticas censales mediante historias de vida. Desde Tecnologia, emplea montaje digital, diseno sonoro, reconstruccion visual y contraste de iluminacion para representar la oficina burocratica, el gueto y la Operacion Barbarroja. Asi funciona como puente entre investigacion academica y sensibilizacion comunitaria.</p>`
+            },
+            analisis5: {
+                title: "Analisis 5: Transversalidad con Colombia",
+                meta: "Comparacion historica | Conflicto armado colombiano",
+                html: `<p>El desplazamiento de la familia de Paquita Sitzer dialoga con el desplazamiento forzado en Colombia y la perdida de territorio e identidad. La estigmatizacion del regimen nazi se relaciona con el etiquetamiento ideologico que ha justificado persecuciones contra lideres y comunidades. Finalmente, la burocracia y la impunidad muestran como normas e instituciones pueden legalizar el despojo o encubrir violaciones de derechos humanos.</p><p>La conclusion central es que la violencia se normaliza cuando el poder combina eficiencia burocratica, deshumanizacion y coercion institucional.</p>`
+            },
+        };
+
+        function openModal(key) {
+            const data = modalDatabase[key];
+            if (!data) return;
+
+            const target = document.getElementById('modal-content-target');
+            target.innerHTML = `
+                <h3>${data.title}</h3>
+                <p style="font-family: Arial, sans-serif; font-size: 0.9rem; color: var(--red-formal); font-weight: bold; margin-bottom: 1rem;">
+                    ${data.meta}
+                </p>
+                <div style="color: var(--text-main); line-height: 1.65;">
+                    ${data.html}
+                </div>
+            `;
+            document.getElementById('custom-modal').style.display = 'flex';
+        }
+
+        function closeModal() {
+            document.getElementById('custom-modal').style.display = 'none';
+        }
+    </script>
+</body>
+</html>
