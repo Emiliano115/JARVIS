@@ -31,8 +31,10 @@ from __future__ import annotations
 # =============================================================================
 # 1. IMPORTS Y RUTAS
 # =============================================================================
-import sys, os, re, json, threading, time, unicodedata, random, shutil, sqlite3, wave, webbrowser, zipfile, tempfile, subprocess, hashlib
-from datetime import datetime, timedelta
+import sys, os, re, json, threading, time, unicodedata, random, sqlite3, webbrowser, zipfile, subprocess, hashlib, logging
+import importlib.util
+from logging.handlers import RotatingFileHandler
+from datetime import datetime
 from urllib.parse import urlparse, parse_qs
 from http.server import HTTPServer, BaseHTTPRequestHandler
 import queue as _queue
@@ -50,30 +52,9 @@ import requests
 import numpy as np
 
 # Windows-specific
-try:
-    import win32gui, win32con
-    import ctypes
-    HAS_WIN32 = True
-except ImportError:
-    HAS_WIN32 = False
-
-try:
-    import keyboard
-    HAS_KEYBOARD = True
-except ImportError:
-    HAS_KEYBOARD = False
-
-try:
-    import pyttsx3
-    HAS_PYTTSX3 = True
-except ImportError:
-    HAS_PYTTSX3 = False
-
-try:
-    import whisper as _whisper_lib
-    HAS_WHISPER = True
-except ImportError:
-    HAS_WHISPER = False
+HAS_WIN32 = importlib.util.find_spec("win32gui") is not None and importlib.util.find_spec("win32con") is not None
+HAS_KEYBOARD = importlib.util.find_spec("keyboard") is not None
+HAS_PYTTSX3 = importlib.util.find_spec("pyttsx3") is not None
 
 try:
     import sounddevice as sd
@@ -81,17 +62,14 @@ try:
 except ImportError:
     HAS_SD = False
 
-try:
-    from word2number_es import w2n
-    HAS_W2N = True
-except ImportError:
-    HAS_W2N = False
-
+HAS_W2N = importlib.util.find_spec("word2number_es") is not None
 try:
     from thefuzz import process as fuzz_process, fuzz
     HAS_FUZZ = True
 except ImportError:
     HAS_FUZZ = False
+    fuzz = None
+    fuzz_process = None
 
 try:
     import pygame
@@ -110,22 +88,19 @@ try:
 except Exception:
     HAS_PYGAME = False
 
-try:
-    from google.oauth2.credentials import Credentials
-    from googleapiclient.discovery import build
-    from google.auth.transport.requests import Request
-    HAS_GOOGLE = True
-except ImportError:
-    HAS_GOOGLE = False
+HAS_GOOGLE = (
+    importlib.util.find_spec("google.oauth2.credentials") is not None
+    and importlib.util.find_spec("googleapiclient.discovery") is not None
+    and importlib.util.find_spec("google.auth.transport.requests") is not None
+)
 
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QTextBrowser, QLineEdit, QPushButton,
-    QHBoxLayout, QDialog, QLabel, QCheckBox, QScrollArea, QFrame,
-    QGridLayout, QMessageBox, QStyle,
-    QTabWidget, QComboBox,
+    QHBoxLayout, QDialog, QLabel, QScrollArea, QFrame,
+    QGridLayout, QMessageBox, QTabWidget, QComboBox,
 )
-from PySide6.QtGui import QFont, QColor, QPalette, QDesktopServices, QPixmap, QImage, QIcon, QPainter
-from PySide6.QtCore import Qt, Signal, QObject, QEvent, QTimer, QUrl, QSize, QPoint
+from PySide6.QtGui import QFont, QColor, QDesktopServices, QPixmap, QIcon, QPainter
+from PySide6.QtCore import Qt, Signal, QObject, QTimer, QUrl, QSize, QPoint
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineSettings, QWebEnginePage
 from PySide6.QtSvg import QSvgRenderer
@@ -139,6 +114,37 @@ else:
     data_path = base_path
 
 os.makedirs(data_path, exist_ok=True)
+
+_LOG_FILE = os.path.join(data_path, "jarvis.log")
+_logger = logging.getLogger("jarvis")
+_logger.setLevel(logging.INFO)
+_logger.propagate = False
+if not _logger.handlers:
+    _log_handler = RotatingFileHandler(
+        _LOG_FILE, maxBytes=1_000_000, backupCount=3, encoding="utf-8"
+    )
+    _log_handler.setFormatter(logging.Formatter("%(asctime)s [%(levelname)s] %(message)s"))
+    _logger.addHandler(_log_handler)
+
+
+def _registrar_error(origen: str, error) -> None:
+    """Guarda errores técnicos sin claves, tokens, correos ni texto sensible."""
+    mensaje = str(error or "")
+    mensaje = re.sub(r"(?i)(api[_-]?key|token|authorization|password|secret)\s*[=:]\s*[^\s,;]+", r"\1=[REDACTADO]", mensaje)
+    mensaje = re.sub(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", "[CORREO]", mensaje)
+    _logger.error("%s: %s", origen, mensaje[:500])
+
+
+def _registrar_excepcion_no_controlada(tipo, valor, tb):
+    _registrar_error("excepcion_no_controlada", valor)
+    sys.__excepthook__(tipo, valor, tb)
+
+
+sys.excepthook = _registrar_excepcion_no_controlada
+if hasattr(threading, "excepthook"):
+    threading.excepthook = lambda args: _registrar_error(
+        f"hilo:{args.thread.name if args.thread else 'desconocido'}", args.exc_value
+    )
 BASE_DIR = base_path
 os.chdir(BASE_DIR)
 
@@ -172,6 +178,27 @@ MESES = {
 
 GROQ_BASE_URL  = "https://api.groq.com/openai/v1/chat/completions"
 GROQ_MODEL     = "llama-3.3-70b-versatile"
+GROQ_MODELOS_FALLBACK = [
+    GROQ_MODEL,
+    "llama-3.1-70b-versatile",
+    "llama-3.1-8b-instant",
+    "meta-llama/llama-4-scout-17b-16e-instruct",
+]
+NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
+NVIDIA_EMBEDDINGS_URL = "https://integrate.api.nvidia.com/v1/embeddings"
+NVIDIA_MODELO_EMBEDDING = "nvidia/nemotron-3-embed-1b"
+NVIDIA_MODELO_RAPIDO = "z-ai/glm-5.3-flash"
+NVIDIA_MODELO_MISTRAL = "mistralai/mistral-nemotron"
+NVIDIA_MODELO_VISION = "meta/llama-3.2-11b-vision-instruct"
+NVIDIA_MODELO_TRADUCCION = "nvidia/riva-translate-4b-instruct-v2"
+NVIDIA_MODELOS_FALLBACK = [
+    "openai/gpt-oss-20b",
+    NVIDIA_MODELO_RAPIDO,
+    NVIDIA_MODELO_MISTRAL,
+]
+NVIDIA_TIMEOUT_SEGUNDOS = 25
+NVIDIA_TIMEOUT_GLM_SEGUNDOS = 60
+_modelo_preferido = "auto"
 ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_MODEL    = "claude-sonnet-4-20250514"
 JARVIS_VERSION     = "2.0.5"
@@ -194,6 +221,7 @@ def cargar_config() -> dict:
         "google_calendar": True, "google_maps": True,
         "guardar_links_apps": True, "guardar_archivos_recientes": True,
         "modo_carga_apps": None, "usar_tts_gratis": True,
+        "avisos_calendar_activados": True,
         "perfil_accesibilidad": "estandar", "lectura_pantalla_max_caracteres": 900,
         "comandos_personalizados": {
             "leer_pantalla": ["lee la pantalla", "modo lectura", "leer el contenido"],
@@ -210,6 +238,30 @@ def cargar_config() -> dict:
         except Exception:
             pass
     return defaults
+
+def validar_config(cfg: dict) -> dict:
+    if not isinstance(cfg, dict):
+        cfg = {}
+    booleanos = (
+        "google_calendar", "google_maps", "guardar_links_apps",
+        "guardar_archivos_recientes", "usar_tts_gratis", "tts_activado",
+        "guardar_memoria_usuario", "notas_auto", "avisos_calendar_activados",
+    )
+    for clave in booleanos:
+        valor = cfg.get(clave)
+        if not isinstance(valor, bool):
+            cfg[clave] = True
+    perfil = cfg.get("perfil_accesibilidad", "estandar")
+    if perfil not in {"estandar", "breve", "detallada"}:
+        cfg["perfil_accesibilidad"] = "estandar"
+    try:
+        limite = int(cfg.get("lectura_pantalla_max_caracteres", 900))
+    except (TypeError, ValueError):
+        limite = 900
+    cfg["lectura_pantalla_max_caracteres"] = max(100, min(limite, 3000))
+    if not isinstance(cfg.get("comandos_personalizados"), dict):
+        cfg["comandos_personalizados"] = {}
+    return cfg
 
 def guardar_config(cfg: dict):
     with open(config_file, "w", encoding="utf-8") as f:
@@ -372,7 +424,7 @@ def _iniciar_actualizacion(tag: str, paquete: str) -> bool:
     subprocess.Popen(["powershell.exe", "-NoProfile", "-ExecutionPolicy", "Bypass", "-File", script], creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0))
     return True
 
-config = cargar_config()
+config = validar_config(cargar_config())
 cargar_modos_extra()
 
 
@@ -500,6 +552,7 @@ def _html_burbuja_jarvis(html_contenido: str) -> str:
     )
 
 def _html_burbuja_usuario(texto: str) -> str:
+    texto = _escape_html(str(texto or ""))
     return (
         f'<div style="background:rgba(20,50,100,0.70);border-radius:12px;'
         f'padding:8px 14px;margin:6px 2px;border-right:3px solid #4db8ff;text-align:right;">'
@@ -748,9 +801,9 @@ def _generar_mapa_mental_eraser(tema: str, ramas: list) -> dict:
         init_resp = requests.post(server_url, json=init_payload, timeout=12)
         if init_resp.ok:
             try:
-                init_body = init_resp.json()
+                init_resp.json()
             except Exception:
-                init_body = {}
+                pass
             tools = []
             tools_resp = None
             try:
@@ -1061,14 +1114,29 @@ def _leer_env() -> dict:
     global _env_cache
     if _env_cache is not None:
         return _env_cache
-    env, path = {}, os.path.join(data_path, ".env")
-    if os.path.exists(path):
-        with open(path, "r", encoding="utf-8") as f:
-            for line in f:
-                line = line.strip()
-                if "=" in line and not line.startswith("#"):
-                    k, v = line.split("=", 1)
-                    env[k.strip()] = v.strip()
+    env = {}
+    paths = [
+        os.path.join(data_path, ".env"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), ".env"),
+        os.path.join(os.path.dirname(os.path.abspath(__file__)), "API_KEYS.ENV"),
+    ]
+    patron = re.compile(r"^([A-Z][A-Z0-9_.]*)\s*=\s*(.*?)\s*$")
+    for path in paths:
+        if not os.path.exists(path):
+            continue
+        try:
+            with open(path, "r", encoding="utf-8") as f:
+                for line in f:
+                    line = line.strip()
+                    if not line or line.startswith("#"):
+                        continue
+                    match = patron.match(line)
+                    if not match:
+                        continue
+                    key, value = match.groups()
+                    env[key] = value.strip().strip('"').strip("'")
+        except OSError as exc:
+            print(f"[Config] No pude leer {path}: {exc}")
     _env_cache = env
     return env
 
@@ -1131,9 +1199,53 @@ def _inicializar_keys() -> dict:
         if v and v not in gemini_keys:
             gemini_keys.append(v)
 
+    nvidia_keys = []
+    server_nvidia_keys = server_keys.get("nvidia_keys", [])
+    if isinstance(server_nvidia_keys, str):
+        server_nvidia_keys = [server_nvidia_keys]
+    for v in server_nvidia_keys:
+        if v and v not in nvidia_keys:
+            nvidia_keys.append(v)
+    for server_key in ("nvidia_api_key", "nvidia_api_key_2", "nvidia_api_key_3"):
+        v = server_keys.get(server_key, "")
+        if v and v not in nvidia_keys:
+            nvidia_keys.append(v)
+    for server_key in (
+        "DEEPSEEK_V4_FLASH_0731_API_KEY",
+        "NVIDIA_NEMOTRON_3.5_LIGTHNIN30B_A3B_API_KEY_2",
+        "GPT_OSS_20B_API_KEY_3",
+        "GTP_OSS_20B_API_KEY_3",
+        "MISTRALAI_API_KEY",
+        "MISTRAL_NEMOTRON_API_KEY",
+    ):
+        v = server_keys.get(server_key, "")
+        if v and v not in nvidia_keys:
+            nvidia_keys.append(v)
+    # Acepta tanto el formato genérico NVIDIA_API_KEY como los nombres
+    # específicos que se muestran en el archivo API_KEYS.ENV del usuario.
+    nombres_nvidia = [
+        "DEEPSEEK_V4_FLASH_0731_API_KEY",
+        "NVIDIA_NEMOTRON_3.5_LIGTHNIN30B_A3B_API_KEY_2",
+        "GPT_OSS_20B_API_KEY_3",
+        "GTP_OSS_20B_API_KEY_3",
+        "GLM_5_3_FLASH_API_KEY",
+        "MISTRALAI_API_KEY",
+        "MISTRAL_NEMOTRON_API_KEY",
+    ]
+    for nombre in nombres_nvidia:
+        v = local_env.get(nombre, "").strip()
+        if v and v not in nvidia_keys:
+            nvidia_keys.append(v)
+    for i in range(1, 10):
+        env_key = "NVIDIA_API_KEY" if i == 1 else f"NVIDIA_API_KEY_{i}"
+        v = local_env.get(env_key, "").strip()
+        if v and v not in nvidia_keys:
+            nvidia_keys.append(v)
+
     return {
         "groq_keys":             groq_keys,
         "gemini_keys":           gemini_keys,
+        "nvidia_keys":           nvidia_keys,
         "anthropic_api_key":     _get("anthropic_api_key", "ANTHROPIC_API_KEY"),
         "news_api_key":          _get("news_api_key", "NEWS_API_KEY"),
         "unsplash_access_key":   _get("unsplash_access_key", "UNSPLASH_ACCESS_KEY"),
@@ -1148,11 +1260,14 @@ _KEYS: dict           = {}
 _KEYS_LISTAS          = threading.Event()
 _groq_keys: list      = []
 _gemini_keys: list    = []
+_nvidia_keys: list    = []
 _groq_key_index: int  = 0
 _gemini_key_index: int = 0
+_nvidia_key_index: int = 0
 
 GROQ_API_KEY          = ""
 GEMINI_API_KEY        = ""
+NVIDIA_API_KEY        = ""
 NEWS_API_KEY          = ""
 ANTHROPIC_API_KEY     = ""
 GOOGLE_SEARCH_API_KEY = ""
@@ -1177,6 +1292,14 @@ def _gemini_key_activa() -> str:
 def _gemini_rotar_key(motivo=""):
     global _gemini_key_index
     _gemini_key_index = (_gemini_key_index + 1) % max(1, len(_gemini_keys))
+
+def _nvidia_key_activa() -> str:
+    return _nvidia_keys[_nvidia_key_index % len(_nvidia_keys)] if _nvidia_keys else ""
+
+def _nvidia_rotar_key(motivo=""):
+    global _nvidia_key_index
+    _nvidia_key_index = (_nvidia_key_index + 1) % max(1, len(_nvidia_keys))
+    print(f"[NVIDIA] Rotando key -> #{_nvidia_key_index + 1} ({motivo})")
 
 
 def _mask_key(k: str) -> str:
@@ -1223,6 +1346,8 @@ def _handle_quota(provider: str, body: str = '', status: int = 0):
             _gemini_rotar_key('quota_detected')
         if provider.lower().startswith('groq'):
             _groq_rotar_key('quota_detected')
+        if provider.lower().startswith('nvidia'):
+            _nvidia_rotar_key('quota_detected')
     except Exception as e:
         print(f"[Quota Detector] Error al manejar quota: {e}")
 
@@ -1238,15 +1363,17 @@ def _cargar_groq_keys() -> list:
     return list(_groq_keys) if _groq_keys else []
 
 def _cargar_keys_background():
-    global _KEYS, _groq_keys, _gemini_keys
-    global GROQ_API_KEY, GEMINI_API_KEY, NEWS_API_KEY, ANTHROPIC_API_KEY
+    global _KEYS, _groq_keys, _gemini_keys, _nvidia_keys
+    global GROQ_API_KEY, GEMINI_API_KEY, NVIDIA_API_KEY, NEWS_API_KEY, ANTHROPIC_API_KEY
     global GOOGLE_SEARCH_API_KEY, GOOGLE_SEARCH_CX, UNSPLASH_ACCESS_KEY
     global PEXELS_API_KEY, ELEVENLABS_API_KEY
     _KEYS             = _inicializar_keys()
     _groq_keys        = _KEYS.get("groq_keys", [])
     _gemini_keys      = _KEYS.get("gemini_keys", [])
+    _nvidia_keys      = _KEYS.get("nvidia_keys", [])
     GROQ_API_KEY      = _groq_key_activa()
     GEMINI_API_KEY    = _gemini_keys[0] if _gemini_keys else ""
+    NVIDIA_API_KEY    = _nvidia_key_activa()
     NEWS_API_KEY      = _KEYS.get("news_api_key", "")
     ANTHROPIC_API_KEY = _KEYS.get("anthropic_api_key", "")
     GOOGLE_SEARCH_API_KEY = _KEYS.get("google_search_api_key", "")
@@ -1258,7 +1385,7 @@ def _cargar_keys_background():
 
     # Log y alerta visual si faltan keys críticas
     if _groq_keys and _gemini_keys:
-        print(f"[Keys] ✅ Groq:{len(_groq_keys)} Gemini:{len(_gemini_keys)} Anthropic:{'✓' if ANTHROPIC_API_KEY else '✗'}")
+        print(f"[Keys] ✅ Groq:{len(_groq_keys)} Gemini:{len(_gemini_keys)} NVIDIA:{len(_nvidia_keys)} Anthropic:{'✓' if ANTHROPIC_API_KEY else '✗'}")
         _bridge.append_html.emit(_html_burbuja_jarvis(
             f'<span style="color:#44cc88;font-size:12px;">✓ IA conectada — '
             f'Groq({len(_groq_keys)}) + Gemini({len(_gemini_keys)})</span>'
@@ -1347,6 +1474,7 @@ def _detener_tts():
 
 def _reproducir_edge_tts(texto: str) -> bool:
     """Reproduce texto con edge-tts (voz neural, NO activa Communications mode)."""
+    ruta_mp3 = None
     try:
         import asyncio, tempfile, edge_tts
         async def _gen():
@@ -1363,18 +1491,21 @@ def _reproducir_edge_tts(texto: str) -> bool:
             ruta_mp3 = loop.run_until_complete(_gen())
         finally:
             loop.close()
-        if HAS_PYGAME and os.path.exists(ruta_mp3):
-            pygame.mixer.music.load(ruta_mp3)
-            pygame.mixer.music.play()
-            while pygame.mixer.music.get_busy():
-                time.sleep(0.05)
+        if not HAS_PYGAME or not os.path.exists(ruta_mp3):
+            return False
+        pygame.mixer.music.load(ruta_mp3)
+        pygame.mixer.music.play()
+        while pygame.mixer.music.get_busy():
+            time.sleep(0.05)
+        return True
+    except Exception as e:
+        print(f"[TTS-Edge] ERROR REAL: {type(e).__name__}: {e}")
+    finally:
+        if ruta_mp3 and os.path.exists(ruta_mp3):
             try:
                 os.remove(ruta_mp3)
-            except Exception:
+            except OSError:
                 pass
-            return True
-    except Exception as e:
-        print(f"[TTS-Edge] {e}")
     return False
 
 
@@ -1437,11 +1568,8 @@ def _hilo_tts():
         print(f"[TTS] SAPI5 no disponible: {e}")
 
     # Detectar si edge-tts está instalado
-    try:
-        import edge_tts
-        HAS_EDGE_TTS = True
-    except ImportError:
-        HAS_EDGE_TTS = False
+    HAS_EDGE_TTS = importlib.util.find_spec("edge_tts") is not None
+    if not HAS_EDGE_TTS:
         print("[TTS] edge-tts no instalado — instala con: pip install edge-tts")
 
     while True:
@@ -1500,7 +1628,8 @@ def _hilo_tts():
                         print(f"[TTS-EL] ERROR REAL: {type(e_el).__name__}: {e_el}")
 
                 # 2. edge-tts (voz neural, NO activa Communications mode)
-                if not reproducido and HAS_EDGE_TTS:
+                if (not reproducido and HAS_EDGE_TTS
+                    and config.get("usar_tts_gratis", True)):
                     reproducido = _reproducir_edge_tts(parte)
 
                 # 3. SAPI5 último recurso (activa ducking — solo si los otros fallan)
@@ -1757,7 +1886,7 @@ def ejecutar_app(nombre: str, ruta: str, chat_widget=None):
             elif ruta_l.startswith("ms-settings:"):
                 # Configuración de Windows — usar start directo
                 print(f"[ejecutar_app] Abriendo ms-settings: {ruta}")
-                subprocess.Popen(f'start "" "{ruta}"', shell=True)
+                os.startfile(ruta)
             elif "shell:appsfolder" in ruta_l:
                 # Caso 1: ruta con GUID → "shell:AppsFolder\{GUID}\ruta\al\archivo.exe"
                 # El exe está dentro de Program Files, buscar en prefijos conocidos
@@ -1805,8 +1934,8 @@ def ejecutar_app(nombre: str, ruta: str, chat_widget=None):
                             print(f"[ejecutar_app] EXE encontrado via glob: {exe_encontrado}")
                             subprocess.Popen([exe_encontrado], shell=False)
                         else:
-                            print(f"[ejecutar_app] No se encontró el exe, abriendo con start shell")
-                            subprocess.Popen(f'start "" "{ruta}"', shell=True)
+                            print(f"[ejecutar_app] No se encontró el exe: {exe_nombre}")
+                            raise FileNotFoundError(exe_nombre)
                 else:
                     # Caso 2: AppID UWP real → "shell:AppsFolder\Publisher.App!App"
                     m_uwp = re.search(r'shell:appsFolder\\([^\s"\\{][^\s"\\]+)', ruta, re.IGNORECASE)
@@ -1820,10 +1949,10 @@ def ejecutar_app(nombre: str, ruta: str, chat_widget=None):
                             shell=False, creationflags=no_win,
                         )
                     else:
-                        subprocess.Popen(f'start "" "{ruta}"', shell=True)
+                        os.startfile(ruta)
             elif ruta_l.startswith("shell:") and "appsfolder" not in ruta_l:
                 print(f"[ejecutar_app] Abriendo shell URI: {ruta}")
-                subprocess.Popen(f'start "" "{ruta}"', shell=True)
+                os.startfile(ruta)
             elif ruta_l.endswith(".lnk"):
                 print(f"[ejecutar_app] Abriendo shortcut con startfile")
                 os.startfile(ruta)
@@ -1838,8 +1967,8 @@ def ejecutar_app(nombre: str, ruta: str, chat_widget=None):
         except Exception as e:
             print(f"[ejecutar_app] ❌ Error primario: {e}")
             try:
-                print(f"[ejecutar_app] Reintentando con start shell...")
-                subprocess.Popen(f'start "" "{ruta}"', shell=True)
+                print(f"[ejecutar_app] Reintentando con startfile...")
+                os.startfile(ruta)
                 print(f"[ejecutar_app] ✅ Fallback ejecutado: {nombre}")
                 hablar(f"Abriendo {nombre}", chat_widget)
             except Exception as e2:
@@ -1978,6 +2107,175 @@ def _agregar_historial(rol: str, texto: str):
             json.dump(_historial, hf, indent=2, ensure_ascii=False)
     except Exception:
         pass
+
+
+# =============================================================================
+# MEMORIA SEMÁNTICA — embeddings NVIDIA + SQLite local
+# =============================================================================
+
+_SEMANTIC_TABLE = "memoria_semantica"
+_semantic_lock = threading.Lock()
+_semantic_db_ready = False
+
+
+def _inicializar_memoria_semantica() -> None:
+    """Prepara el almacén local de textos y vectores sin añadir otra dependencia."""
+    global _semantic_db_ready
+    if _semantic_db_ready:
+        return
+    with _semantic_lock:
+        if _semantic_db_ready:
+            return
+        try:
+            db_path = os.path.join(data_path, "jarvis_notas.db")
+            with sqlite3.connect(db_path) as conn:
+                conn.execute(
+                    f"""CREATE TABLE IF NOT EXISTS {_SEMANTIC_TABLE} (
+                        id INTEGER PRIMARY KEY AUTOINCREMENT,
+                        tipo TEXT NOT NULL,
+                        origen TEXT NOT NULL,
+                        texto TEXT NOT NULL,
+                        hash_texto TEXT NOT NULL,
+                        vector TEXT NOT NULL,
+                        actualizado TEXT NOT NULL,
+                        UNIQUE(tipo, origen)
+                    )"""
+                )
+            _semantic_db_ready = True
+        except Exception as exc:
+            _registrar_error("memoria_semantica.init", exc)
+
+
+def _obtener_embedding(texto: str) -> list[float]:
+    """Obtiene un vector remoto de NVIDIA; nunca ejecuta un modelo local."""
+    texto = re.sub(r"\s+", " ", str(texto or "")).strip()
+    if not texto or not _nvidia_keys:
+        return []
+    try:
+        respuesta = requests.post(
+            NVIDIA_EMBEDDINGS_URL,
+            json={"model": NVIDIA_MODELO_EMBEDDING, "input": [texto[:8000]]},
+            headers={
+                "Authorization": f"Bearer {_nvidia_key_activa()}",
+                "Content-Type": "application/json",
+            },
+            timeout=15,
+        )
+        if respuesta.status_code in (401, 403, 429):
+            _nvidia_rotar_key(f"embedding {respuesta.status_code}")
+            return []
+        if respuesta.status_code != 200:
+            print(f"[Embeddings/NVIDIA] HTTP {respuesta.status_code}: {respuesta.text[:220]}")
+            return []
+        datos = respuesta.json()
+        vector = (datos.get("data") or [{}])[0].get("embedding")
+        if not isinstance(vector, list) or not vector:
+            return []
+        return [float(valor) for valor in vector]
+    except (requests.RequestException, ValueError, TypeError, KeyError) as exc:
+        _registrar_error("memoria_semantica.embedding", exc)
+        return []
+
+
+def _indexar_documento_semantico(tipo: str, origen: str, texto: str) -> None:
+    texto = re.sub(r"\s+", " ", str(texto or "")).strip()
+    if not texto:
+        return
+    _inicializar_memoria_semantica()
+    if not _semantic_db_ready:
+        return
+    hash_texto = hashlib.sha256(texto.encode("utf-8")).hexdigest()
+    try:
+        with sqlite3.connect(os.path.join(data_path, "jarvis_notas.db")) as conn:
+            existente = conn.execute(
+                f"SELECT hash_texto FROM {_SEMANTIC_TABLE} WHERE tipo=? AND origen=?",
+                (tipo, origen),
+            ).fetchone()
+            if existente and existente[0] == hash_texto:
+                return
+        vector = _obtener_embedding(texto)
+        if not vector:
+            return
+        with sqlite3.connect(os.path.join(data_path, "jarvis_notas.db")) as conn:
+            conn.execute(
+                f"""INSERT INTO {_SEMANTIC_TABLE}
+                   (tipo, origen, texto, hash_texto, vector, actualizado)
+                   VALUES (?, ?, ?, ?, ?, ?)
+                   ON CONFLICT(tipo, origen) DO UPDATE SET
+                   texto=excluded.texto, hash_texto=excluded.hash_texto,
+                   vector=excluded.vector, actualizado=excluded.actualizado""",
+                (tipo, origen, texto, hash_texto, json.dumps(vector), datetime.now().isoformat(timespec="seconds")),
+            )
+    except Exception as exc:
+        _registrar_error("memoria_semantica.index", exc)
+
+
+def _sincronizar_memoria_semantica() -> None:
+    """Indexa notas y memoria persistente solo cuando aparecen o cambian."""
+    if not _nvidia_keys:
+        return
+    try:
+        import agent_notas as _notas
+        with _notas._get_conn() as conn:
+            notas = conn.execute("SELECT id, titulo, contenido FROM notas").fetchall()
+            recuerdos = conn.execute("SELECT clave, valor FROM memoria_sesion").fetchall()
+        for nota in notas:
+            _indexar_documento_semantico(
+                "nota", str(nota["id"]), f"{nota['titulo']}: {nota['contenido']}"
+            )
+        for recuerdo in recuerdos:
+            _indexar_documento_semantico(
+                "memoria", str(recuerdo["clave"]), f"{recuerdo['clave']}: {recuerdo['valor']}"
+            )
+        _indexar_documento_semantico(
+            "perfil", "usuario", json.dumps(memoria_usuario, ensure_ascii=False, sort_keys=True)
+        )
+    except Exception as exc:
+        _registrar_error("memoria_semantica.sync", exc)
+
+
+def _obtener_contexto_semantico(pregunta: str, max_resultados: int = 5) -> str:
+    """Busca recuerdos relevantes y los devuelve como contexto acotado para la IA."""
+    pregunta = str(pregunta or "").strip()
+    if not pregunta or not _nvidia_keys:
+        return ""
+    _sincronizar_memoria_semantica()
+    vector_pregunta = _obtener_embedding(pregunta)
+    if not vector_pregunta:
+        return ""
+    _inicializar_memoria_semantica()
+    if not _semantic_db_ready:
+        return ""
+    resultados = []
+    try:
+        with sqlite3.connect(os.path.join(data_path, "jarvis_notas.db")) as conn:
+            filas = conn.execute(
+                f"SELECT tipo, origen, texto, vector FROM {_SEMANTIC_TABLE}"
+            ).fetchall()
+        consulta = np.asarray(vector_pregunta, dtype=np.float32)
+        norma_consulta = float(np.linalg.norm(consulta))
+        if norma_consulta == 0:
+            return ""
+        for tipo, origen, texto, vector_json in filas:
+            vector = np.asarray(json.loads(vector_json), dtype=np.float32)
+            if vector.shape != consulta.shape:
+                continue
+            norma = float(np.linalg.norm(vector))
+            if norma == 0:
+                continue
+            similitud = float(np.dot(consulta, vector) / (norma_consulta * norma))
+            resultados.append((similitud, tipo, origen, texto))
+    except (OSError, sqlite3.Error, ValueError, TypeError) as exc:
+        _registrar_error("memoria_semantica.search", exc)
+        return ""
+    resultados.sort(key=lambda item: item[0], reverse=True)
+    relevantes = [item for item in resultados if item[0] >= 0.25][:max_resultados]
+    if not relevantes:
+        return ""
+    lineas = ["[RECUERDOS SEMÁNTICOS RELEVANTES]:"]
+    for similitud, tipo, origen, texto in relevantes:
+        lineas.append(f"- ({tipo}, similitud {similitud:.2f}) {texto[:700]}")
+    return "\n".join(lineas)
 
 
 def _marcar_nueva_sesion():
@@ -2375,6 +2673,10 @@ def _contexto_actual(mensaje_actual: str = "") -> str:
     # CONTEXTO CONVERSACIONAL PROFUNDO (ultra-mejorado para detectar temas y entidades)
     contexto_profundo = _obtener_contexto_conversacional_profundo(mensaje_actual)
     contexto_profundo_txt = f"\n{contexto_profundo}" if contexto_profundo else ""
+
+    # Recuperación semántica de notas y recuerdos persistentes.
+    contexto_semantico = _obtener_contexto_semantico(mensaje_actual)
+    contexto_semantico_txt = f"\n{contexto_semantico}" if contexto_semantico else ""
     
     # Información sobre continuidad conversacional
     continuidad = ""
@@ -2394,6 +2696,7 @@ def _contexto_actual(mensaje_actual: str = "") -> str:
         f"Fecha/hora: {datetime.now().strftime('%d/%m/%Y %H:%M')}\n"
         f"{continuidad}\n"
         f"{contexto_profundo_txt}\n"
+        f"{contexto_semantico_txt}\n"
     )
 
 # =============================================================================
@@ -2418,9 +2721,12 @@ _HERRAMIENTAS = """
 - suspender                          → suspender el PC
 - modo             {nombre}          → activar modo de trabajo (gaming, estudio, programacion)
 - buscar_archivo   {termino}         → buscar y abrir archivo en disco
+- diagnostico_jarvis                 → comprobar componentes y mostrar soluciones
+- autoprueba_jarvis                  → verificar funciones locales sin red
 
 # AGENTE BÚSQUEDA (agent_search)
 - buscar_web       {pregunta}        → buscar información en internet
+- traducir         {texto, idioma_destino?, idioma_origen?} → traducir texto con NVIDIA Riva
 - mostrar_mapa     {lugar}           → mostrar mapa interactivo de un lugar dentro de Jarvis (ciudades, países, direcciones)
 - abrir_url        {consulta}        → abrir página web específica (ej: "página oficial de SpaceX", "noticias Caracol", "YouTube", "Instagram de NASA")
 - noticias         {tema?, categoria?}→ noticias recientes
@@ -2456,13 +2762,30 @@ _HERRAMIENTAS = """
 - alarma_crear     {hora, etiqueta?, repetir?} → hora: "07:30" o "en 20 minutos"
 - alarma_listar                      → ver alarmas activas
 - alarma_eliminar  {id|etiqueta}
-- recordatorio_crear {texto, fecha_hora?, minutos?}
+- recordatorio_crear {texto, fecha_hora?, minutos?, acompanamiento?, categoria?, max_intentos?, intervalo_minutos?}
 - recordatorio_listar
 - recordatorio_eliminar {id|texto}
+- recordatorio_confirmar {id?|texto?} → confirmar que se realizó un recordatorio de acompañamiento
+- acompanamiento_resumen            → resumen de recordatorios y alarmas de hoy
+- contacto_confianza_guardar {nombre, destino, canal?} → guardar contacto local, sin enviar
+- contactos_confianza_listar       → listar contactos autorizados
+- contacto_confianza_eliminar {nombre}
+- enviar_aviso_contacto {nombre, mensaje, asunto?} → prepara correo y pide confirmación
 - memoria_guardar  {clave, valor}    → guardar dato en memoria de sesión
 - memoria_leer     {clave?}          → leer memoria de sesión
+- memoria_buscar   {termino}         → buscar en claves y valores guardados
+- memoria_olvidar  {termino}         → olvidar recuerdos coincidentes
+- memoria_exportar                    → exportar memoria a JSON local
 - memoria_resumir                    → resumen de todo lo que Jarvis recuerda
 - memoria_limpiar                    → borrar memoria de sesión
+- memoria_borrar_todo                 → borrar memoria personal y de sesión
+- rutina_crear {nombre, acciones[]}   → guardar rutina segura
+- rutina_listar                        → listar rutinas
+- rutina_previsualizar {nombre}        → mostrar acciones sin ejecutarlas
+- rutina_ejecutar {nombre}             → ejecutar tras confirmación
+- rutina_programar {nombre, fecha_hora}→ programar ejecución única
+- rutina_pausar/reanudar {nombre}      → controlar programación
+- rutina_historial {nombre}            → ver acciones ejecutadas y fechas
 
 # AGENTE PANTALLA (observación y control explícito)
 - ver_pantalla                                         → abrir el visor de pantalla en tiempo real
@@ -2537,6 +2860,13 @@ _PROMPT_SISTEMA_TEMPLATE = (
     "   ▪ Buscar/investigar/noticias/clima/mapas → buscar_web/noticias/clima/mostrar_mapa.\n"
     "   ▪ Fotos/imágenes de temas → buscar_imagen (SIEMPRE usa esto para imágenes)\n"
     "   ▪ Notas/alarmas/recordatorios → agente notas.\n"
+    "   ▪ Para medicamentos, citas, alimentación o rutinas, crea un recordatorio con acompanamiento=true, una categoria clara, max_intentos=3 e intervalo_minutos=5.\n"
+    "   ▪ Un recordatorio de acompañamiento debe pedir confirmación por voz y nunca afirmar que la persona realizó una acción si no la confirmó.\n"
+    "   ▪ Si el usuario dice 'ya lo hice', 'listo', 'tarea realizada' o 'confirma el recordatorio', usa recordatorio_confirmar.\n"
+    "   ▪ Si pide 'qué tengo hoy', 'resumen del día' o 'mi agenda de hoy', usa acompanamiento_resumen para revisar recordatorios y alarmas locales.\n"
+    "   ▪ Para guardar un familiar, usa contacto_confianza_guardar solo cuando estén presentes nombre y destino; nunca envíes mensajes al guardarlo.\n"
+    "   ▪ Para avisar a un contacto de confianza, usa enviar_aviso_contacto. Solo puede enviarse por correo mediante Gmail y siempre requiere confirmación explícita.\n"
+    "   ▪ Si el contacto solo tiene teléfono o WhatsApp, informa que aún no hay envío automático disponible; nunca digas que el mensaje fue enviado.\n"
     "   ▪ Correo/calendar/tareas → agente google.\n"
     "   ▪ gmail_enviar SIEMPRE requiere confirmación posterior: prepara el correo, muestra destinatario/asunto y espera 'sí/envíalo'.\n"
     "   ▪ Nunca trates 'gmail_enviar' como confirmado solo porque el usuario lo pidió inicialmente.\n"
@@ -2547,7 +2877,7 @@ _PROMPT_SISTEMA_TEMPLATE = (
     "    NO lo repitas sin motivo nuevo o sin que el usuario lo pida explícitamente.\n"
     "11. NO incluyas 'responder' ANTES de acciones que hablan por sí solas:\n"
     "    nota_leer, nota_buscar, ver_tareas, ver_eventos, gmail_leer, gmail_buscar,\n"
-    "    alarma_listar, recordatorio_listar, memoria_resumir, memoria_leer, drive_buscar,\n"
+    "    alarma_listar, recordatorio_listar, memoria_resumir, memoria_leer, memoria_buscar, memoria_olvidar, memoria_exportar, drive_buscar,\n"
     "    buscar_imagen, buscar_web, noticias, clima, mostrar_mapa.\n"
     "12. RESPUESTAS DE VOZ: máximo 2 oraciones. RESPUESTAS DE CHAT: puedes dar más detalle en HTML.\n"
     "13. ESTRUCTURA JSON VÁLIDA: NUNCA devuelvas HTML suelto.\n"
@@ -2723,6 +3053,7 @@ _http_server = None
 
 class _UIBridge(QObject):
     append_html = Signal(str)
+    status_changed = Signal(str)
     scroll_down = Signal()
     quit_app    = Signal()
     append_to_v5_chat = Signal(str)
@@ -2788,6 +3119,16 @@ def _ejecutar_js_v5(html_content: str):
                 'if(window.voiceBars){window.voiceBars.classList.add("active");}'
             )
             return
+        if html_content == "__STATUS_PROCESSING__":
+            _webview_ref.page().runJavaScript(
+                'if(window.jarvisSetStatus){window.jarvisSetStatus("processing");}'
+            )
+            return
+        if html_content == "__STATUS_READY__":
+            _webview_ref.page().runJavaScript(
+                'if(window.jarvisSetStatus){window.jarvisSetStatus("ready");}'
+            )
+            return
 
         js_payload = json.dumps(html_content)
         script = (
@@ -2822,6 +3163,130 @@ def _ejecutar_js_mapa_v5(lat: float, lon: float, nombre: str, info_html: str = "
         print(f"[V5 Mapa] Error al abrir Google Maps    : {e}")
 
 
+def _diagnostico_jarvis(chat_widget=None):
+    """Comprueba dependencias locales y conectividad sin consumir APIs de IA."""
+    resultados = []
+
+    def comprobar(nombre, ok, detalle, solucion):
+        resultados.append((nombre, bool(ok), detalle, solucion))
+
+    comprobar("Micrófono", HAS_SD,
+              "sounddevice disponible" if HAS_SD else "sounddevice no está instalado",
+              "Instala sounddevice o activa el permiso del micrófono.")
+    if HAS_SD:
+        try:
+            entradas = [d for d in sd.query_devices() if int(d.get("max_input_channels", 0)) > 0]
+            comprobar("Dispositivo de entrada", bool(entradas),
+                      f"{len(entradas)} dispositivo(s) detectado(s)" if entradas else "No se detectó ningún micrófono",
+                      "Conecta un micrófono y revisa el dispositivo seleccionado en Configuración.")
+        except Exception as exc:
+            _registrar_error("diagnostico.microfono", exc)
+            comprobar("Dispositivo de entrada", False, "No se pudo consultar el audio", "Revisa permisos de Windows y el controlador de audio.")
+
+    comprobar("Audio de salida", HAS_PYGAME and pygame.mixer.get_init() is not None,
+              "pygame mixer activo" if HAS_PYGAME and pygame.mixer.get_init() else "pygame mixer no está activo",
+              "Reinicia Jarvis y revisa el dispositivo de salida de Windows.")
+    try:
+        import edge_tts
+        comprobar("Edge TTS", True, f"edge-tts {getattr(edge_tts, '__version__', 'instalado')}",
+                  "Instala edge-tts con: pip install edge-tts")
+    except ImportError:
+        comprobar("Edge TTS", False, "Módulo no instalado", "Instala edge-tts en el mismo entorno de Jarvis.")
+
+    try:
+        import win32com.client
+        voz_sapi = win32com.client.Dispatch("SAPI.SpVoice")
+        comprobar("SAPI5", voz_sapi is not None, "SAPI.SpVoice disponible", "Activa una voz de Windows en Configuración de voz.")
+    except Exception as exc:
+        _registrar_error("diagnostico.sapi5", exc)
+        comprobar("SAPI5", False, "No se pudo crear SAPI.SpVoice", "Instala o repara las voces de Windows.")
+
+    try:
+        respuesta = requests.get("https://www.google.com/generate_204", timeout=5)
+        comprobar("Internet", respuesta.status_code < 500,
+                  f"HTTP {respuesta.status_code}", "Comprueba la conexión a internet y el firewall.")
+    except requests.RequestException as exc:
+        _registrar_error("diagnostico.red", exc)
+        comprobar("Internet", False, "No hubo respuesta de red", "Comprueba Wi-Fi, proxy o firewall.")
+
+    comprobar("IA", bool(_groq_keys or _gemini_keys or _nvidia_keys),
+              f"Groq: {len(_groq_keys)}, Gemini: {len(_gemini_keys)}, NVIDIA: {len(_nvidia_keys)}",
+              "Conecta el servidor de claves o configura un archivo .env local.")
+    token_file = os.path.join(data_path, "token.json")
+    comprobar("Google", HAS_GOOGLE and os.path.exists(token_file),
+              "Token OAuth local encontrado" if HAS_GOOGLE and os.path.exists(token_file) else "Google no está autorizado",
+              "Di 'conectar Google' para autorizar Calendar, Gmail y Tasks.")
+    comprobar("Comandos locales", True, "Volumen, apps, archivos y recordatorios disponibles sin IA",
+              "No requiere conexión.")
+
+    filas = "".join(
+        f'<tr><td style="padding:5px;color:{"#a8e6cf" if ok else "#ff9b9b"};">{"OK" if ok else "FALLO"}</td>'
+        f'<td style="padding:5px;color:#ccd6f6;">{_escape_html(nombre)}</td>'
+        f'<td style="padding:5px;color:#8899bb;">{_escape_html(detalle)}</td></tr>'
+        for nombre, ok, detalle, _ in resultados
+    )
+    soluciones = [f"{nombre}: {solucion}" for nombre, ok, _, solucion in resultados if not ok]
+    html = (
+        '<p style="color:#4db8ff;font-weight:bold;">🩺 Diagnóstico de Jarvis</p>'
+        f'<table cellspacing="0" width="100%">{filas}</table>'
+    )
+    if soluciones:
+        html += '<p style="color:#ffd166;font-weight:bold;">Soluciones sugeridas</p><ul>' + "".join(
+            f'<li style="color:#ccd6f6;">{_escape_html(s)}</li>' for s in soluciones
+        ) + '</ul>'
+    _bridge.append_html.emit(_html_burbuja_jarvis(html))
+    _bridge.scroll_down.emit()
+    fallos = sum(1 for _, ok, _, _ in resultados if not ok)
+    hablar(f"Diagnóstico terminado: {fallos} problema(s) detectado(s)." if fallos else "Diagnóstico terminado: todos los componentes principales están disponibles.", chat_widget)
+    return resultados
+
+
+def _autoprueba_jarvis(chat_widget=None):
+    """Ejecuta comprobaciones locales rápidas sin red, OAuth ni IA."""
+    pruebas = []
+
+    def comprobar(nombre, resultado, detalle):
+        pruebas.append((nombre, bool(resultado), detalle))
+
+    comprobar("Configuración", isinstance(config, dict), "configuración cargada")
+    comprobar("Registro local", os.path.exists(_LOG_FILE), "jarvis.log disponible")
+    comprobar("Base local", os.path.exists(os.path.join(data_path, "jarvis_notas.db")), "SQLite disponible")
+    try:
+        import edge_tts
+        comprobar("Edge TTS", True, getattr(edge_tts, "__version__", "instalado"))
+    except ImportError:
+        comprobar("Edge TTS", False, "módulo no instalado")
+    try:
+        import agent_notas
+        agent_notas._init_db()
+        with agent_notas._get_conn() as conn:
+            tablas = {row[0] for row in conn.execute(
+                "SELECT name FROM sqlite_master WHERE type='table'"
+            )}
+        requeridas = {"recordatorios", "memoria_sesion", "rutinas", "rutinas_log", "memoria_semantica"}
+        comprobar("Funciones locales", requeridas <= tablas, "tablas locales verificadas")
+    except Exception as exc:
+        _registrar_error("autoprueba.sqlite", exc)
+        comprobar("Funciones locales", False, "no se pudo verificar SQLite")
+
+    filas = "".join(
+        f'<tr><td style="color:{"#a8e6cf" if ok else "#ff9b9b"};padding:4px;">'
+        f'{"OK" if ok else "FALLO"}</td><td style="color:#ccd6f6;padding:4px;">{_escape_html(nombre)}</td>'
+        f'<td style="color:#8899bb;padding:4px;">{_escape_html(detalle)}</td></tr>'
+        for nombre, ok, detalle in pruebas
+    )
+    _bridge.append_html.emit(_html_burbuja_jarvis(
+        f'<p style="color:#4db8ff;font-weight:bold;">🧪 Autoprueba local</p><table>{filas}</table>'
+    ))
+    _bridge.scroll_down.emit()
+    fallos = sum(1 for _, ok, _ in pruebas if not ok)
+    hablar(
+        f"Autoprueba terminada: {fallos} fallo(s)." if fallos else "Autoprueba terminada: las funciones locales principales están bien.",
+        chat_widget,
+    )
+    return pruebas
+
+
 def _reset_v5_mic():
     """Thread-safe: emite señal para resetear el botón mic en el hilo Qt."""
     _bridge.append_to_v5_chat.emit("__RESET_MIC__")
@@ -2851,6 +3316,9 @@ class JarvisWebPage(QWebEnginePage):
             query = parse_qs(url.query())
             if comando == "cmd":
                 texto = query.get("text", [""])[0]
+                if texto.startswith("__SET_MODEL__:"):
+                    _establecer_modelo_preferido(texto.split(":", 1)[1].strip())
+                    return False
                 if texto == "__OPEN_CONFIG__":
                     # Abrir diálogo de configuración en el hilo Qt principal
                     _bridge.open_config_dialog.emit()
@@ -2954,7 +3422,7 @@ def _analizar_pantalla_con_vision(chat_widget=None, pregunta=""):
             if not _KEYS_LISTAS.is_set():
                 _KEYS_LISTAS.wait(timeout=15)
             frame = agent_screen.obtener_ultimo_frame() or agent_screen.capturar_frame()
-            if frame is None or (not _groq_keys and not _gemini_keys):
+            if frame is None or (not _groq_keys and not _gemini_keys and not _nvidia_keys):
                 _mostrar_error("No tengo un frame disponible o no hay una clave de visión activa.")
                 return
             import base64
@@ -2976,6 +3444,39 @@ def _analizar_pantalla_con_vision(chat_widget=None, pregunta=""):
                 "temperature": 0.2,
             }
             texto = ""
+
+            # NVIDIA Llama Vision: análisis remoto de pantalla sin GPU local.
+            if _nvidia_keys:
+                vision_payload = {
+                    "model": NVIDIA_MODELO_VISION,
+                    "messages": [{"role": "user", "content": [
+                        {"type": "image_url", "image_url": {"url": f"data:image/jpeg;base64,{encoded}"}},
+                        {"type": "text", "text": instruccion},
+                    ]}],
+                    "max_tokens": 800,
+                    "temperature": 0.2,
+                }
+                try:
+                    vision_resp = requests.post(
+                        NVIDIA_BASE_URL,
+                        json=vision_payload,
+                        headers={
+                            "Authorization": f"Bearer {_nvidia_key_activa()}",
+                            "Content-Type": "application/json",
+                        },
+                        timeout=NVIDIA_TIMEOUT_SEGUNDOS,
+                    )
+                    if vision_resp.status_code == 200:
+                        texto = vision_resp.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+                        if texto:
+                            print(f"[Vision/NVIDIA] {NVIDIA_MODELO_VISION} respondió correctamente")
+                    else:
+                        print(f"[Vision/NVIDIA] HTTP {vision_resp.status_code}: {vision_resp.text[:300]}")
+                except requests.exceptions.Timeout:
+                    print(f"[Vision/NVIDIA] Timeout tras {NVIDIA_TIMEOUT_SEGUNDOS}s; usando respaldo")
+                except requests.exceptions.RequestException as vision_exc:
+                    print(f"[Vision/NVIDIA] Error de red: {vision_exc}")
+
             if not texto and _gemini_keys:
                 gemini_payload = {
                     "contents": [{"parts": [
@@ -2984,7 +3485,7 @@ def _analizar_pantalla_con_vision(chat_widget=None, pregunta=""):
                     ]}],
                     "generationConfig": {"temperature": 0.2, "maxOutputTokens": 1400},
                 }
-                for modelo in ("gemini-2.5-flash", "gemini-2.0-flash"):
+                for modelo in ("gemini-3.6-flash", "gemini-2.5-flash"):
                     url = f"https://generativelanguage.googleapis.com/v1beta/models/{modelo}:generateContent?key={_gemini_key_activa()}"
                     try:
                         gem_resp = requests.post(url, json=gemini_payload, timeout=30)
@@ -3024,6 +3525,7 @@ def _analizar_pantalla_con_vision(chat_widget=None, pregunta=""):
                 _mostrar_error("No pude analizar visualmente la pantalla. Revisa la cuota de Gemini o el acceso a los modelos de visión de Groq.")
                 return
             if texto:
+                texto = _aplicar_perfil_lectura(texto)
                 html = _markdown_a_html(texto)
                 _bridge.append_html.emit(_html_burbuja_jarvis(f"<b>Visión de pantalla</b><br>{html}"))
                 _bridge.scroll_down.emit()
@@ -3034,6 +3536,30 @@ def _analizar_pantalla_con_vision(chat_widget=None, pregunta=""):
             _bridge.append_html.emit(_html_burbuja_jarvis("<b>Visión de pantalla</b><br>Ocurrió un error al analizar la pantalla."))
             _bridge.scroll_down.emit()
     threading.Thread(target=_trabajo, daemon=True, name="ScreenVision").start()
+
+
+def _aplicar_perfil_lectura(texto: str) -> str:
+    perfil = PERFILES_ACCESIBILIDAD.get(
+        config.get("perfil_accesibilidad", "estandar"),
+        PERFILES_ACCESIBILIDAD["estandar"],
+    )
+    try:
+        max_caracteres = int(config.get("lectura_pantalla_max_caracteres", perfil["max_caracteres"]))
+    except (TypeError, ValueError):
+        max_caracteres = perfil["max_caracteres"]
+    try:
+        max_lineas = int(config.get("lectura_pantalla_max_lineas", perfil["max_lineas"]))
+    except (TypeError, ValueError):
+        max_lineas = perfil["max_lineas"]
+    max_caracteres = max(100, min(max_caracteres, 3000))
+    max_lineas = max(1, min(max_lineas, 50))
+    lineas = str(texto or "").splitlines()
+    limitado = "\n".join(lineas[:max_lineas]).strip()
+    truncado = len(lineas) > max_lineas
+    if len(limitado) > max_caracteres:
+        limitado = limitado[:max_caracteres].rsplit(" ", 1)[0].rstrip()
+        truncado = True
+    return limitado + ("..." if truncado and limitado else "")
 
 
 def _leer_pantalla_local(chat_widget=None):
@@ -3049,6 +3575,7 @@ def _leer_pantalla_local(chat_widget=None):
     if not texto:
         hablar("No encontré texto legible en la pantalla.", chat_widget)
         return
+    texto = _aplicar_perfil_lectura(texto)
     html = "<p>" + _escape_html(texto).replace("\n", "<br>") + "</p>"
     _bridge.append_html.emit(_html_burbuja_jarvis("<b>Texto de la pantalla</b><br>" + html))
     _bridge.scroll_down.emit()
@@ -3221,7 +3748,7 @@ def _abrir_url_especifica(consulta: str, chat_widget=None):
     # 2. Coincidencia parcial — buscar la clave más larga que esté contenida
     # Ordenar por longitud DESC para que "spacex" gane sobre "x", "caracol noticias" sobre "caracol"
     if not url:
-        mejor_clave, mejor_len = None, 0
+        mejor_clave = None
         for clave in sorted(_SITIOS_WEB.keys(), key=len, reverse=True):
             if clave in c_clean or clave in c:
                 mejor_clave = clave
@@ -3241,9 +3768,6 @@ def _abrir_url_especifica(consulta: str, chat_widget=None):
             # Búsqueda Google con "sitio oficial"
             query_google = f"{consulta} sitio oficial"
             url = f"https://www.google.com/search?q={_q(query_google)}"
-        nombre_voz = consulta
-    else:
-        nombre_voz = consulta
 
     # Mostrar en chat
     etiqueta = consulta if not url.startswith('http') else (urlparse(url).netloc or consulta)
@@ -3259,7 +3783,94 @@ def _abrir_url_especifica(consulta: str, chat_widget=None):
     hablar("Abriendo la página solicitada.", chat_widget)
     _wb.open(url)
 
-def _ejecutar_accion(accion: dict, chat_widget=None):
+_confirmacion_pendiente: dict | None = None
+_confirmacion_lock = threading.Lock()
+_CONFIRMACION_TIMEOUT_SEGUNDOS = 60
+
+_ACCIONES_DESTRUCTIVAS = {
+    "cerrar_app": "cerrar la aplicación",
+    "apagar": "apagar el equipo",
+    "reiniciar": "reiniciar el equipo",
+    "suspender": "suspender el equipo",
+    "hibernar": "hibernar el equipo",
+    "gmail_eliminar": "enviar correos a la papelera",
+    "eliminar_evento": "eliminar el evento de Calendar",
+    "eliminar_tarea": "eliminar la tarea de Google Tasks",
+    "nota_eliminar": "eliminar la nota local",
+    "alarma_eliminar": "eliminar la alarma local",
+    "recordatorio_eliminar": "eliminar el recordatorio local",
+    "contacto_confianza_eliminar": "eliminar el contacto de confianza",
+    "memoria_limpiar": "borrar la memoria de sesión",
+    "memoria_borrar_todo": "borrar toda la memoria personal y de sesión",
+    "rutina_ejecutar": "ejecutar la rutina guardada",
+}
+
+
+def _descripcion_confirmacion(nombre: str, params: dict) -> str:
+    """Describe la acción pendiente con los datos que se van a modificar."""
+    objetivo = (
+        params.get("nombre") or params.get("consulta") or
+        params.get("nombre_buscar") or params.get("titulo_buscar") or
+        params.get("titulo") or params.get("texto") or params.get("etiqueta")
+    )
+    descripcion = _ACCIONES_DESTRUCTIVAS.get(nombre, "ejecutar esta acción")
+    return f"{descripcion} '{str(objetivo).strip()[:120]}'" if objetivo else descripcion
+
+
+def _solicitar_confirmacion(accion: dict, chat_widget=None) -> None:
+    global _confirmacion_pendiente
+    nombre = str(accion.get("accion", "")).strip()
+    params = accion.get("params", {}) or {}
+    descripcion = _descripcion_confirmacion(nombre, params)
+    with _confirmacion_lock:
+        _confirmacion_pendiente = {
+            "accion": accion,
+            "chat_widget": chat_widget,
+            "creada_en": time.monotonic(),
+        }
+    mensaje = f"Voy a {descripcion}. ¿Confirmas?"
+    hablar(mensaje, chat_widget)
+    html = (
+        '<b>⚠️ Confirmación necesaria</b><br>'
+        f'<span style="color:#ffaa44;">{_escape_html(mensaje)}</span><br>'
+        '<span style="color:#8899bb;font-size:12px;">'
+        'Di "sí" para continuar o "cancela" para detenerlo.</span>'
+    )
+    _bridge.append_html.emit(_html_burbuja_jarvis(html))
+    _bridge.scroll_down.emit()
+
+
+def hay_confirmacion_pendiente() -> bool:
+    with _confirmacion_lock:
+        return _confirmacion_pendiente is not None
+
+
+def resolver_confirmacion_pendiente(comando: str, chat_widget=None) -> bool:
+    """Consume una confirmación explícita y ejecuta la acción almacenada."""
+    global _confirmacion_pendiente
+    texto = quitar_tildes(str(comando or "").lower()).strip(" .,!?:;")
+    confirmaciones = {"si", "confirmo", "confirmar", "adelante", "hazlo", "ejecuta"}
+    cancelaciones = {"no", "cancela", "cancelar", "anula", "anular", "detente", "detener"}
+    if texto not in confirmaciones and texto not in cancelaciones:
+        return False
+    with _confirmacion_lock:
+        pendiente = _confirmacion_pendiente
+        _confirmacion_pendiente = None
+    if not pendiente:
+        return True
+    creada_en = pendiente.get("creada_en", 0)
+    if time.monotonic() - creada_en > _CONFIRMACION_TIMEOUT_SEGUNDOS:
+        hablar("La confirmación expiró. Solicita la acción de nuevo si todavía la necesitas.", chat_widget)
+        return True
+    destino = chat_widget or pendiente.get("chat_widget")
+    if texto in cancelaciones:
+        hablar("Acción cancelada. No se hizo ningún cambio.", destino)
+        return True
+    _ejecutar_accion(pendiente["accion"], destino, _omitir_confirmacion=True)
+    return True
+
+
+def _ejecutar_accion(accion: dict, chat_widget=None, _omitir_confirmacion: bool = False):
     """Despacha una acción del JSON al agente correspondiente."""
     if not isinstance(accion, dict):
         return
@@ -3269,6 +3880,13 @@ def _ejecutar_accion(accion: dict, chat_widget=None):
 
     # DEBUG: Log all actions
     print(f"[_ejecutar_accion] Accion={nombre}, Params={p}")
+
+    if nombre == "diagnostico_jarvis":
+        _diagnostico_jarvis(chat_widget)
+        return
+    if nombre == "autoprueba_jarvis":
+        _autoprueba_jarvis(chat_widget)
+        return
 
     # Respuestas variadas de confirmacion (para TTS)
     _CONF_ABRIR = ["Abriendo {}", "Listo, abriendo {}", "Va {}", "En un momento, {}"]
@@ -3288,6 +3906,10 @@ def _ejecutar_accion(accion: dict, chat_widget=None):
             nested["accion"] = nested.pop("action")
             _ejecutar_accion(nested, chat_widget)
             return
+
+    if not _omitir_confirmacion and nombre in _ACCIONES_DESTRUCTIVAS:
+        _solicitar_confirmacion({"accion": nombre, "params": p}, chat_widget)
+        return
 
     # ── Respuesta directa ──────────────────────────────────────────────────────
     if nombre == "responder":
@@ -3401,6 +4023,14 @@ def _ejecutar_accion(accion: dict, chat_widget=None):
         except Exception as e:
             print(f"[ERROR→Search] agent_search.ejecutar fallo: {e}")
             hablar("Error en búsqueda web.", chat_widget)
+        return
+
+    if nombre == "traducir":
+        try:
+            agent_search.ejecutar("traducir", p, chat_widget)
+        except Exception as e:
+            print(f"[ERROR→Translation] agent_search.ejecutar fallo: {e}")
+            hablar("Error en la traducción.", chat_widget)
         return
 
     if nombre == "mostrar_mapa":
@@ -3569,12 +4199,46 @@ def _ejecutar_accion(accion: dict, chat_widget=None):
         agent_google.ejecutar(ac_g, p, chat_widget)
         return
 
+    if nombre == "enviar_aviso_contacto":
+        contacto = agent_notas.contacto_confianza_obtener(p.get("nombre", ""))
+        if not contacto:
+            hablar("No encontré ese contacto de confianza. Revísalo en Configuración, en la pestaña Confianza.", chat_widget)
+            return
+        correo = contacto.get("correo", "")
+        if not correo:
+            hablar(
+                f"{contacto['nombre']} no tiene correo guardado. El envío por teléfono o WhatsApp todavía no está conectado.",
+                chat_widget,
+            )
+            return
+        mensaje = str(p.get("mensaje", p.get("cuerpo", ""))).strip()
+        if not mensaje:
+            hablar("Necesito el texto del aviso.", chat_widget)
+            return
+        agent_google.ejecutar(
+            "gmail_enviar",
+            {
+                "destinatario": correo,
+                "asunto": p.get("asunto", "Aviso de Jarvis"),
+                "cuerpo": mensaje,
+                "nombre_contacto": contacto["nombre"],
+            },
+            chat_widget,
+        )
+        return
+
     # ── Agente Notas ───────────────────────────────────────────────────────────
     _ACCIONES_NOTAS = {
         "nota_crear", "nota_leer", "nota_buscar", "nota_editar", "nota_eliminar",
         "alarma_crear", "alarma_listar", "alarma_eliminar",
-        "recordatorio_crear", "recordatorio_listar", "recordatorio_eliminar",
+        "recordatorio_crear", "recordatorio_listar", "recordatorio_eliminar", "recordatorio_confirmar", "acompanamiento_resumen",
+        "contacto_confianza_guardar", "contactos_confianza_listar", "contacto_confianza_eliminar",
+        "enviar_aviso_contacto",
         "memoria_guardar", "memoria_leer", "memoria_resumir", "memoria_limpiar",
+        "memoria_buscar", "memoria_olvidar", "memoria_exportar", "memoria_borrar_todo",
+        "rutina_crear", "rutina_listar", "rutina_previsualizar", "rutina_ejecutar",
+        "rutina_programar", "rutina_pausar", "rutina_reanudar",
+        "rutina_historial",
     }
     if nombre in _ACCIONES_NOTAS:
         agent_notas.ejecutar(nombre, p, chat_widget)
@@ -3693,15 +4357,14 @@ def _llamar_groq(mensaje: str) -> list:
         historial=_formatear_historial(mensaje),
         contexto=_contexto_actual(mensaje),
     )
-    
+
     # Detectar si el usuario pide una extensión/ampliación de respuesta anterior
     es_extension = _es_extension_respuesta(mensaje)
     mensaje_final = mensaje
-    
+
     if es_extension:
         ultima_respuesta = _obtener_ultima_respuesta_jarvis()
         if ultima_respuesta:
-            # Agregar instrucción explícita de extensión al mensaje
             extension_hint = (
                 f"\n\n[INSTRUCCIÓN CRÍTICA DE EXTENSIÓN: El usuario pide que amplíes/continúes tu respuesta anterior. "
                 f"Tu anterior respuesta fue exactamente esta: '{ultima_respuesta[:500]}...' "
@@ -3711,101 +4374,209 @@ def _llamar_groq(mensaje: str) -> list:
             )
             mensaje_final = mensaje + extension_hint
         else:
-            # Si no hay última respuesta de Jarvis, simplemente enviar el mensaje
             mensaje_final = mensaje
-    
-    payload = {
-        "model": GROQ_MODEL,
-        "messages": [
-            {"role": "system", "content": system},
-            {"role": "user",   "content": mensaje_final},
-        ],
-        "temperature": 0.4,
-        "max_tokens":  1500,
-    }
 
-    resp = None
-    for _ in range(max(1, len(_groq_keys) * 2)):
-        headers = {
-            "Authorization": f"Bearer {_groq_key_activa()}",
-            "Content-Type": "application/json",
+    modelos = []
+    for modelo in [GROQ_MODEL] + [m for m in GROQ_MODELOS_FALLBACK if m != GROQ_MODEL]:
+        if modelo and modelo not in modelos:
+            modelos.append(modelo)
+
+    for modelo in modelos:
+        payload = {
+            "model": modelo,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user",   "content": mensaje_final},
+            ],
+            "temperature": 0.4,
+            "max_tokens":  1500,
         }
+
+        resp = None
+        for _ in range(max(1, len(_groq_keys) * 2)):
+            headers = {
+                "Authorization": f"Bearer {_groq_key_activa()}",
+                "Content-Type": "application/json",
+            }
+            try:
+                resp = requests.post(GROQ_BASE_URL, json=payload, headers=headers, timeout=25)
+            except requests.exceptions.ConnectionError:
+                time.sleep(2)
+                continue
+
+            if resp.status_code == 429:
+                _groq_rotar_key("429")
+                time.sleep(1)
+                resp = None
+                continue
+            if resp.status_code == 401:
+                _groq_rotar_key("401")
+                resp = None
+                continue
+            if resp.status_code == 404:
+                print(f"[Groq] Modelo no disponible: {modelo}. Probando siguiente opción.")
+                resp = None
+                break
+            if resp.status_code != 200:
+                print(f"[Groq] HTTP {resp.status_code}: {resp.text[:200]}")
+                return []
+            break
+
+        if resp is None:
+            continue
+
         try:
-            resp = requests.post(GROQ_BASE_URL, json=payload, headers=headers, timeout=25)
-        except requests.exceptions.ConnectionError:
-            time.sleep(2)
-            continue
-
-        if resp.status_code == 429:
-            _groq_rotar_key("429")
-            time.sleep(1)
-            resp = None
-            continue
-        if resp.status_code == 401:
-            _groq_rotar_key("401")
-            resp = None
-            continue
-        if resp.status_code != 200:
-            print(f"[Groq] HTTP {resp.status_code}: {resp.text[:200]}")
+            resp_data = resp.json()
+            raw = resp_data["choices"][0]["message"]["content"].strip()
+        except Exception as e:
+            print(f"[Groq] Error parseando respuesta: {e} | texto: {resp.text[:300]}")
             return []
-        break
 
-    if resp is None:
+        usage = resp_data.get("usage", {})
+        _groq_tokens["total"]    += usage.get("total_tokens", 0)
+        _groq_tokens["llamadas"] += 1
+
+        print(f"[Groq] Raw ({modelo}): {raw[:200]}")
+        raw_limpio = _limpiar_json(raw)
+        try:
+            r = json.loads(raw_limpio)
+        except json.JSONDecodeError as e:
+            print(f"[Groq] JSON inválido: {e} | raw_limpio: {raw_limpio[:200]}")
+            return [{"accion": "responder", "params": {"texto": f"<p>{raw[:400]}</p>"}}]
+
+        r = r if isinstance(r, list) else [r]
+
+        r_valido = []
+        for a in r:
+            if not isinstance(a, dict):
+                print(f"[Groq] Elemento inválido ignorado: {a}")
+                continue
+            if "accion" not in a:
+                print(f"[Groq] Elemento sin 'accion' ignorado: {a}")
+                continue
+            if "params" not in a:
+                a["params"] = {}
+            r_valido.append(a)
+
+        if not r_valido:
+            print(f"[Groq] Sin acciones válidas en: {r}")
+            return [{"accion": "responder", "params": {"texto": f"<p>{raw[:400]}</p>"}}]
+
+        _ACCIONES_SISTEMA = {
+            "abrir_app", "cerrar_app", "minimizar_app", "maximizar_app",
+            "poner_volumen", "subir_volumen", "bajar_volumen", "mute",
+            "subir_brillo", "bajar_brillo", "modo", "buscar_archivo",
+        }
+        for a in r_valido:
+            ac = a.get("accion", "")
+            if ac in _ACCIONES_SISTEMA:
+                nombre_app = a.get("params", {}).get("nombre", "")
+                _agregar_historial("jarvis", f"[ejecutado: {ac}{' ' + nombre_app if nombre_app else ''}]")
+
+        return r_valido
+
+    print("[Groq] Ningún modelo disponible respondió correctamente.")
+    return []
+
+
+def _llamar_nvidia(mensaje: str, modelos=None) -> list:
+    """Usa NVIDIA API como cerebro remoto; no requiere GPU local."""
+    inicio_nvidia = time.monotonic()
+    if not _KEYS_LISTAS.is_set():
+        _KEYS_LISTAS.wait(timeout=60)
+    if not _nvidia_keys:
         return []
 
-    # Parsear UNA SOLA VEZ para evitar KeyError al llamar .json() dos veces
-    try:
-        resp_data = resp.json()
-        raw = resp_data["choices"][0]["message"]["content"].strip()
-    except Exception as e:
-        print(f"[Groq] Error parseando respuesta: {e} | texto: {resp.text[:300]}")
-        return []
+    system = _construir_prompt(
+        historial=_formatear_historial(mensaje),
+        contexto=_contexto_actual(mensaje),
+    )
+    modelos = modelos or NVIDIA_MODELOS_FALLBACK
 
-    # Contar tokens usando resp_data (no resp.json() de nuevo)
-    usage = resp_data.get("usage", {})
-    _groq_tokens["total"]    += usage.get("total_tokens", 0)
-    _groq_tokens["llamadas"] += 1
+    for modelo in modelos:
+        payload = {
+            "model": modelo,
+            "messages": [
+                {"role": "system", "content": system},
+                {"role": "user", "content": mensaje},
+            ],
+            "temperature": 0.4,
+            "top_p": 0.95,
+            "max_tokens": 1500,
+        }
+        if modelo == NVIDIA_MODELO_RAPIDO:
+            payload["extra_body"] = {
+                "chat_template_kwargs": {"enable_thinking": False},
+            }
+        elif modelo == NVIDIA_MODELO_MISTRAL:
+            payload["extra_body"] = {
+                "chat_template_kwargs": {
+                    "clear_thinking": True,
+                },
+            }
+        for _ in range(max(1, len(_nvidia_keys) * 2)):
+            try:
+                resp = requests.post(
+                    NVIDIA_BASE_URL,
+                    json=payload,
+                    headers={
+                        "Authorization": f"Bearer {_nvidia_key_activa()}",
+                        "Content-Type": "application/json",
+                    },
+                    timeout=(
+                        NVIDIA_TIMEOUT_GLM_SEGUNDOS
+                        if modelo == NVIDIA_MODELO_RAPIDO and _modelo_preferido == "glm"
+                        else NVIDIA_TIMEOUT_SEGUNDOS
+                    ),
+                )
+            except requests.exceptions.ConnectionError:
+                print(f"[NVIDIA] Sin conexión al endpoint ({modelo}); probando siguiente opción.")
+                continue
+            except requests.exceptions.Timeout:
+                transcurrido = time.monotonic() - inicio_nvidia
+                print(f"[NVIDIA] Timeout esperando {modelo} tras {transcurrido:.1f}s; probando siguiente proveedor.")
+                break
 
-    print(f"[Groq] Raw: {raw[:200]}")   # log para depuración
-    raw_limpio = _limpiar_json(raw)
-    try:
-        r = json.loads(raw_limpio)
-    except json.JSONDecodeError as e:
-        print(f"[Groq] JSON inválido: {e} | raw_limpio: {raw_limpio[:200]}")
-        return [{"accion": "responder", "params": {"texto": f"<p>{raw[:400]}</p>"}}]
+            if resp.status_code in (401, 403, 429):
+                _nvidia_rotar_key(str(resp.status_code))
+                continue
+            if resp.status_code == 404:
+                print(f"[NVIDIA] Modelo no disponible: {modelo}")
+                break
+            if resp.status_code != 200:
+                print(f"[NVIDIA] HTTP {resp.status_code}: {resp.text[:300]}")
+                break
 
-    r = r if isinstance(r, list) else [r]
+            try:
+                data = resp.json()
+                raw = data["choices"][0]["message"].get("content", "").strip()
+                if not raw:
+                    break
+                parsed = json.loads(_limpiar_json(raw))
+                acciones = parsed if isinstance(parsed, list) else [parsed]
+                validas = []
+                for accion in acciones:
+                    if isinstance(accion, dict) and "accion" in accion:
+                        accion.setdefault("params", {})
+                        validas.append(accion)
+                if validas:
+                    transcurrido = time.monotonic() - inicio_nvidia
+                    print(f"[NVIDIA] Respuesta válida ({modelo}) en {transcurrido:.1f}s")
+                    return validas
+            except (KeyError, ValueError, json.JSONDecodeError) as exc:
+                print(f"[NVIDIA] Respuesta no válida ({modelo}): {exc}")
+            break
 
-    # Validar que cada elemento sea un dict con "accion"
-    r_valido = []
-    for a in r:
-        if not isinstance(a, dict):
-            print(f"[Groq] Elemento inválido ignorado: {a}")
-            continue
-        if "accion" not in a:
-            print(f"[Groq] Elemento sin 'accion' ignorado: {a}")
-            continue
-        if "params" not in a:
-            a["params"] = {}
-        r_valido.append(a)
+    print("[NVIDIA] Ningún modelo disponible respondió correctamente.")
+    return []
 
-    if not r_valido:
-        print(f"[Groq] Sin acciones válidas en: {r}")
-        return [{"accion": "responder", "params": {"texto": f"<p>{raw[:400]}</p>"}}]
 
-    # Guardar en historial
-    _ACCIONES_SISTEMA = {
-        "abrir_app", "cerrar_app", "minimizar_app", "maximizar_app",
-        "poner_volumen", "subir_volumen", "bajar_volumen", "mute",
-        "subir_brillo", "bajar_brillo", "modo", "buscar_archivo",
-    }
-    for a in r_valido:
-        ac = a.get("accion", "")
-        if ac in _ACCIONES_SISTEMA:
-            nombre_app = a.get("params", {}).get("nombre", "")
-            _agregar_historial("jarvis", f"[ejecutado: {ac}{' ' + nombre_app if nombre_app else ''}]")
-
-    return r_valido
+def _establecer_modelo_preferido(modelo: str) -> str:
+    global _modelo_preferido
+    permitidos = {"auto", "glm", "mistral", "gpt_oss", "groq", "gemini"}
+    _modelo_preferido = modelo if modelo in permitidos else "auto"
+    print(f"[Modelo] Preferencia activa: {_modelo_preferido}")
+    return _modelo_preferido
 
 
 def _llamar_gemini_cerebro(mensaje: str) -> list:
@@ -3826,7 +4597,7 @@ def _llamar_gemini_cerebro(mensaje: str) -> list:
         "generationConfig": {"temperature": 0.4, "maxOutputTokens": 1500},
     }).encode("utf-8")
 
-    for modelo in ["gemini-2.5-flash", "gemini-2.0-flash"]:
+    for modelo in ["gemini-3.6-flash", "gemini-2.5-flash"]:
         url = (f"https://generativelanguage.googleapis.com/v1beta/models/"
                f"{modelo}:generateContent?key={gemini_key}")
         req = _ur.Request(url, data=payload_bytes,
@@ -3900,8 +4671,12 @@ _COMANDOS_DIRECTOS = [
     (r'mis\s+alarmas?|ver\s+alarmas?|qu[eé]\s+alarmas?\s+tengo',
                                                       "alarma_listar", {}),
     # ── Recordatorios ──────────────────────────────────────────────────────────
+    (r'^(?:qu[eé]\s+tengo\s+hoy|resumen\s+(?:de\s+)?(?:mi\s+)?d[ií]a|mi\s+agenda\s+de\s+hoy)$',
+                                                      "acompanamiento_resumen", {}),
     (r'mis\s+recordatorios?|ver\s+recordatorios?|qu[eé]\s+recordatorios?\s+tengo',
                                                       "recordatorio_listar", {}),
+    (r'^(?:ya\s+(?:lo|la)\s+hice|listo(?:,?\s+ya\s+(?:lo|la)\s+hice)?|tarea\s+realizada|confirma(?:r)?\s+(?:el\s+)?recordatorio)$',
+                                                      "recordatorio_confirmar", {}),
     # ── Memoria ────────────────────────────────────────────────────────────────
     (r'resumen\s+(de\s+)?memoria|qu[eé]\s+recuerdas?|qu[eé]\s+(sabes|tienes)\s+de\s+m[ií]',
                                                       "memoria_resumir", {}),
@@ -3923,6 +4698,68 @@ def _intentar_comando_directo(texto: str) -> dict | None:
     personalizado = _comando_personalizado(txt)
     if personalizado:
         return personalizado
+
+    recordatorio = re.match(
+        r"(?:recu[eé]rdame(?:\s+que)?|crea(?:r)?\s+(?:un\s+)?recordatorio(?:\s+de)?|anota(?:r)?\s+para)\s+(.+?)\s+(?:en\s+(\d+)\s+minutos?|a\s+las\s+(\d{1,2}:\d{2}))$",
+        txt,
+    )
+    if not recordatorio:
+        recordatorio = re.match(
+            r"(?:recu[eé]rdame(?:\s+que)?|crea(?:r)?\s+(?:un\s+)?recordatorio(?:\s+de)?)\s+en\s+(\d+)\s+minutos?\s+(?:que\s+|para\s+)?(.+)$",
+            txt,
+        )
+        if recordatorio:
+            recordatorio = (recordatorio.group(2), recordatorio.group(1), None)
+    if recordatorio:
+        if isinstance(recordatorio, tuple):
+            texto_rec, minutos, hora = recordatorio
+        else:
+            texto_rec = recordatorio.group(1).strip()
+            minutos = recordatorio.group(2)
+            hora = recordatorio.group(3)
+        params = {"texto": texto_rec}
+        if minutos:
+            params["minutos"] = int(minutos)
+        elif hora:
+            params["fecha_hora"] = hora
+        return {"accion": "recordatorio_crear", "params": params}
+
+    archivo = re.match(
+        r"(?:busca|buscar|encuentra|encontrar)\s+(?:el\s+|un\s+)?archivo\s+(.+)$",
+        txt,
+    )
+    if archivo:
+        return {"accion": "buscar_archivo", "params": {"termino": archivo.group(1).strip()}}
+    if re.fullmatch(r"(?:diagn[oó]stico|diagnostica|revisa)\s+(?:de\s+)?(?:jarvis|el\s+sistema|sistema)", txt):
+        return {"accion": "diagnostico_jarvis", "params": {}}
+    if re.fullmatch(r"(?:autoprueba|auto prueba|prueba)\s+(?:de\s+)?jarvis", txt):
+        return {"accion": "autoprueba_jarvis", "params": {}}
+
+    rutina = re.match(r"(?:previsualiza|muestra)\s+(?:la\s+)?rutina\s+(.+)$", txt)
+    if rutina:
+        return {"accion": "rutina_previsualizar", "params": {"nombre": rutina.group(1).strip()}}
+    rutina = re.match(r"(?:ejecuta|ejecutar|inicia)\s+(?:la\s+)?rutina\s+(.+)$", txt)
+    if rutina:
+        return {"accion": "rutina_ejecutar", "params": {"nombre": rutina.group(1).strip()}}
+    rutina = re.match(r"(?:pausa|pausar)\s+(?:la\s+)?rutina\s+(.+)$", txt)
+    if rutina:
+        return {"accion": "rutina_pausar", "params": {"nombre": rutina.group(1).strip()}}
+    rutina = re.match(r"(?:reanuda|reanudar)\s+(?:la\s+)?rutina\s+(.+)$", txt)
+    if rutina:
+        return {"accion": "rutina_reanudar", "params": {"nombre": rutina.group(1).strip()}}
+    if re.fullmatch(r"(?:lista|listar|muestra|mostrar)\s+(?:mis\s+)?rutinas", txt):
+        return {"accion": "rutina_listar", "params": {}}
+
+    memoria_buscar = re.match(r"(?:busca|buscar)\s+(?:en\s+)?(?:mi\s+)?memoria\s+(.+)$", txt)
+    if memoria_buscar:
+        return {"accion": "memoria_buscar", "params": {"termino": memoria_buscar.group(1).strip()}}
+    memoria_olvidar = re.match(r"(?:olvida|olvidar|borra|borrar)\s+(?:de\s+)?(?:mi\s+)?memoria\s+(.+)$", txt)
+    if memoria_olvidar:
+        return {"accion": "memoria_olvidar", "params": {"termino": memoria_olvidar.group(1).strip()}}
+    if re.fullmatch(r"(?:exporta|exportar)\s+(?:mi\s+)?memoria", txt):
+        return {"accion": "memoria_exportar", "params": {}}
+    if re.fullmatch(r"(?:borra|borrar|elimina|eliminar)\s+(?:toda\s+)?(?:mi\s+)?memoria", txt):
+        return {"accion": "memoria_borrar_todo", "params": {}}
 
     def _extraer_coordenadas(texto: str) -> tuple[int, int] | None:
         patrones = [
@@ -4024,6 +4861,20 @@ def _intentar_comando_directo(texto: str) -> dict | None:
     if re.search(r'\b(?:recalibra|recalibrar|reinicia|reiniciar)\b.*\b(?:modo\s+)?(?:de\s+)?(?:gesto(?:s)?|control\s+por\s+gestos|camara|cámara)\b', txt):
         return {"accion": "recalibrar_gestos", "params": {}}
 
+    traduccion = re.match(
+        r'^(?:traduce|traducir|traducción|traduccion)\s+(?:al|a)\s+([a-záéíóúñ ]+?)\s*[:,-]?\s+(.+)$',
+        txt,
+        re.IGNORECASE,
+    )
+    if traduccion:
+        return {
+            "accion": "traducir",
+            "params": {
+                "idioma_destino": traduccion.group(1).strip() or "inglés",
+                "texto": traduccion.group(2).strip(),
+            },
+        }
+
     if re.search(r'\b(?:click|clic|pulsa(?:r)?|presiona(?:r)?|toca(?:r)?|haz|da|dale|realiza|ejecuta)\b', txt) and re.search(r'\b(?:click|clic|pulsa(?:r)?|presiona(?:r)?|toca(?:r)?)\b', txt):
         boton = "left"
         if re.search(r'\b(?:derecho|right)\b', txt):
@@ -4124,6 +4975,23 @@ def _intentar_comando_directo(texto: str) -> dict | None:
         contenido = m.group(1).strip()
         if contenido:
             return {"accion": "nota_crear", "params": {"contenido": contenido}}
+
+    # ── Aviso a contacto de confianza (resolución local, sin LLM) ───────────
+    m_aviso = re.search(
+        r'^(?:env[ií]a?|manda?|envia|mandar)\s+(?:un\s+)?(?:mensaje|correo|aviso)\s+a\s+'
+        r'(?:de\s+mis\s+contactos?\s+de\s+confianza\s+)?(.+?)\s+'
+        r'(?:diciendo|que\s+diga|con\s+el\s+mensaje)\s+(.+)$',
+        txt, re.IGNORECASE
+    )
+    if m_aviso:
+        nombre = re.sub(
+            r'\s+de\s+mis\s+contactos?\s+de\s+confianza\s*$',
+            '', m_aviso.group(1), flags=re.IGNORECASE
+        ).strip()
+        return {
+            "accion": "enviar_aviso_contacto",
+            "params": {"nombre": nombre, "mensaje": m_aviso.group(2).strip().rstrip(".!?")},
+        }
 
     # ── BÚSQUEDA — busca / qué es / quién es / cómo funciona ─────────────────
     m_busca = re.search(
@@ -4238,6 +5106,14 @@ def _corregir_destinatario_correo(accion: dict, comando: str) -> dict:
     params = dict(accion.get("params", {}) or {})
     if correo_original:
         params["destinatario"] = correo_original
+        m_nombre = re.search(
+            r'(?:correo|mensaje|email)\s+a\s+(.+?)\s+(?:diciendo|que\s+diga|con\s+el\s+asunto|con\s+asunto)',
+            quitar_tildes(str(comando or "").lower()),
+        )
+        if m_nombre:
+            nombre = re.sub(r'\s+(?:de\s+mis\s+contactos?\s+de\s+confianza)\s*$', '', m_nombre.group(1)).strip()
+            if nombre and "@" not in nombre:
+                params["nombre_contacto"] = nombre
     elif not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", str(params.get("destinatario", ""))):
         params["destinatario"] = ""
     accion["params"] = params
@@ -4252,7 +5128,7 @@ def _activar_modo_conversacion():
     threading.Thread(target=_desactivar, daemon=True).start()
 
 
-def interpretar_multiple(comando: str, chat_widget=None, mostrar_usuario: bool = True):
+def _interpretar_multiple_impl(comando: str, chat_widget=None, mostrar_usuario: bool = True):
     """
     Punto de entrada principal. Recibe el texto del usuario (voz o escrito),
     lo procesa y delega a los agentes correspondientes.
@@ -4310,6 +5186,8 @@ def interpretar_multiple(comando: str, chat_widget=None, mostrar_usuario: bool =
 
     # ── Resolver estados pendientes (app vs web, archivo Office) ─────────────
     import agent_pc as _apc
+    if resolver_confirmacion_pendiente(comando, chat_widget):
+        return
     if _apc.hay_destino_pendiente():
         if _apc.resolver_destino_pendiente(comando, chat_widget):
             return
@@ -4357,7 +5235,7 @@ def interpretar_multiple(comando: str, chat_widget=None, mostrar_usuario: bool =
 
     acciones = None
 
-    if not _groq_keys and not _gemini_keys:
+    if not _groq_keys and not _gemini_keys and not _nvidia_keys:
         _bridge.append_html.emit(_html_burbuja_jarvis(
             '<span style="color:#ff5555;font-size:13px;">❌ Sin IA disponible</span><br>'
             '<span style="color:#8899bb;font-size:12px;">'
@@ -4367,7 +5245,7 @@ def interpretar_multiple(comando: str, chat_widget=None, mostrar_usuario: bool =
         _bridge.scroll_down.emit()
         return
 
-    # ── Routing: Gemini para análisis/búsqueda, Groq para comandos simples ──
+    # ── Routing: NVIDIA primero; Groq/Gemini quedan como respaldo ──
     _KEYWORDS_ANALISIS = [
         "qué", "que", "quién", "quien", "cómo", "como", "cuál", "cual",
         "cuándo", "cuando", "dónde", "donde", "explica", "explícame",
@@ -4387,45 +5265,54 @@ def interpretar_multiple(comando: str, chat_widget=None, mostrar_usuario: bool =
     cmd_lower_routing = comando.lower()
     es_comando_simple = any(cmd_lower_routing.startswith(kw) or f" {kw} " in f" {cmd_lower_routing} "
                             for kw in _KEYWORDS_COMANDO)
-    es_analisis = any(kw in cmd_lower_routing for kw in _KEYWORDS_ANALISIS)
 
-    # Usar Gemini si: es análisis/búsqueda Y hay Gemini disponible
-    usar_gemini_primero = es_analisis and not es_comando_simple and bool(_gemini_keys)
+    palabras_complejas = [
+        "programa", "programación", "programacion", "código", "codigo",
+        "debug", "depura", "arquitectura", "investigación", "investigacion",
+        "compara modelos", "analiza profundamente", "paso a paso",
+    ]
+    es_tarea_compleja = (
+        not es_comando_simple
+        and any(palabra in cmd_lower_routing for palabra in palabras_complejas)
+    )
+    modelo_preferido = _modelo_preferido
+    usar_nvidia = modelo_preferido in {"auto", "glm", "mistral", "gpt_oss"}
+    usar_groq = modelo_preferido in {"auto", "groq"}
+    usar_gemini = modelo_preferido in {"auto", "gemini"}
 
-    if usar_gemini_primero:
-        # Gemini primero para análisis y búsqueda
-        if _gemini_keys:
-            try:
-                acciones = _llamar_gemini_cerebro(comando)
-            except Exception as e:
-                import traceback
-                print(f"[Gemini] Excepción: {e}")
-                traceback.print_exc()
-                acciones = []
-        # Fallback a Groq si Gemini falla
-        if not acciones and _groq_keys:
-            try:
-                acciones = _llamar_groq(comando)
-            except Exception as e:
-                print(f"[Groq fallback] {e}")
-                acciones = []
+    if modelo_preferido == "glm":
+        modelos = [NVIDIA_MODELO_RAPIDO]
+    elif modelo_preferido == "mistral":
+        modelos = [NVIDIA_MODELO_MISTRAL]
+    elif modelo_preferido == "gpt_oss":
+        modelos = ["openai/gpt-oss-20b"]
+    elif es_tarea_compleja:
+        # Auto prioriza velocidad; los modelos lentos quedan disponibles
+        # mediante selección manual en la interfaz.
+        modelos = ["openai/gpt-oss-20b"]
     else:
-        # Groq primero para comandos simples
-        if _groq_keys:
-            try:
-                acciones = _llamar_groq(comando)
-            except Exception as e:
-                import traceback
-                print(f"[Groq] Excepción: {e}")
-                traceback.print_exc()
-                acciones = []
-        # Fallback a Gemini si Groq falla
-        if not acciones and _gemini_keys:
-            try:
-                acciones = _llamar_gemini_cerebro(comando)
-            except Exception as e:
-                print(f"[Gemini fallback] {e}")
-                acciones = None
+        modelos = ["openai/gpt-oss-20b", NVIDIA_MODELO_RAPIDO]
+
+    if _nvidia_keys and usar_nvidia:
+        try:
+            acciones = _llamar_nvidia(comando, modelos=modelos)
+        except Exception as e:
+            print(f"[NVIDIA] Excepción: {e}")
+            acciones = []
+
+    if not acciones and _groq_keys and usar_groq:
+        try:
+            acciones = _llamar_groq(comando)
+        except Exception as e:
+            print(f"[Groq fallback] {e}")
+            acciones = []
+
+    if not acciones and _gemini_keys and usar_gemini:
+        try:
+            acciones = _llamar_gemini_cerebro(comando)
+        except Exception as e:
+            print(f"[Gemini fallback] {e}")
+            acciones = []
 
     if acciones:
         for accion in acciones:
@@ -4444,6 +5331,19 @@ def interpretar_multiple(comando: str, chat_widget=None, mostrar_usuario: bool =
     ))
     _bridge.scroll_down.emit()
     hablar("No pude conectar con la IA. Revisa la consola para más detalles.", chat_widget)
+
+
+def interpretar_multiple(comando: str, chat_widget=None, mostrar_usuario: bool = True):
+    """Procesa un comando y mantiene visible el estado real del asistente."""
+    if not comando or not comando.strip():
+        return
+    _bridge.status_changed.emit("processing")
+    _bridge.append_to_v5_chat.emit("__STATUS_PROCESSING__")
+    try:
+        _interpretar_multiple_impl(comando, chat_widget, mostrar_usuario)
+    finally:
+        _bridge.status_changed.emit("ready")
+        _bridge.append_to_v5_chat.emit("__STATUS_READY__")
 
 # =============================================================================
 # 13b. MOTOR DE ESCUCHA (Groq Whisper)
@@ -4679,7 +5579,9 @@ def _hilo_siempre_escuchando():
         "harvis", "garvis", "sarvis", "darvis",
     }
     _WAKE_SUBSTR = ["jarvi"]   # solo substring muy cercano
-    _AMP_MIN     = 0.0025  # Umbral wake word para micrófonos con señal baja
+    # El umbral de activación es más estricto que el de los comandos: reduce
+    # activaciones por tarareos, TV o ruido de fondo sin afectar la grabación manual.
+    _AMP_MIN     = 0.006   # Umbral wake word
     _AMP_MIN_CMD = 0.003  # Umbral de comandos; evita perder voz normal
     _MIN_CHUNK_DURATION_S = 1.2  # El wake word debe estar en al menos 1.2s de audio real
     _MIN_WORDS_VALID      = 2    # Mínimo 2 palabras para considerar comando real
@@ -4711,7 +5613,7 @@ def _hilo_siempre_escuchando():
     def _es_wake_valido(texto_clean: str, palabras: list, amp: float, rms: float) -> bool:
         """Valida que el wake word sea genuino y no ruido/audio ambiente."""
         # Amplitud y RMS mínimos
-        if amp < _AMP_MIN or rms < 0.0015:
+        if amp < _AMP_MIN or rms < 0.0025:
             return False
         # Debe contener la wake word real y no una lista genérica de verbos.
         tiene_wake = (
@@ -4893,6 +5795,9 @@ def _inicializar_agentes():
         "base_path":       data_path,
         "resource_path":   base_path,
         "config":          config,
+        "memoria_usuario": memoria_usuario,
+        "guardar_memoria": _guardar_memoria,
+        "ejecutar_accion": _ejecutar_accion,
     }
 
     # ── agent_search ──────────────────────────────────────────────────────────
@@ -4907,6 +5812,11 @@ def _inicializar_agentes():
         "gemini_key_activa":   _gemini_key_activa,
         "gemini_rotar_key":    _gemini_rotar_key,
         "gemini_keys":         lambda: _gemini_keys,
+        "nvidia_keys":         lambda: _nvidia_keys,
+        "nvidia_key_activa":   _nvidia_key_activa,
+        "nvidia_rotar_key":    _nvidia_rotar_key,
+        "NVIDIA_BASE_URL":     NVIDIA_BASE_URL,
+        "NVIDIA_MODELO_TRADUCCION": NVIDIA_MODELO_TRADUCCION,
         "GROQ_BASE_URL":       GROQ_BASE_URL,
         "GROQ_MODEL":          GROQ_MODEL,
         "groq_tokens":         _groq_tokens,
@@ -4972,6 +5882,7 @@ def _inicializar_agentes():
         "formatear_fecha":      formatear_fecha,
         "SERVIDOR_AUTH":        SERVIDOR_AUTH,
         "SCOPES":               SCOPES,
+        "guardar_contacto_confianza": agent_notas.guardar_correo_contacto,
     })
     print("[Agentes] ✅ agent_google listo")
 
@@ -4979,6 +5890,7 @@ def _inicializar_agentes():
     agent_notas.init({
         **ctx_base,
     })
+    _inicializar_memoria_semantica()
     print("[Agentes] ✅ agent_notas listo")
 
 # =============================================================================
@@ -5512,6 +6424,95 @@ class Interruptor(QPushButton):
         painter.drawEllipse(24 if self.isChecked() else 4, 5, 16, 16)
 
 
+class VentanaContactosConfianza(QWidget):
+    """Panel local para administrar contactos autorizados para futuras alertas."""
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        layout = QVBoxLayout(self)
+        layout.setContentsMargins(24, 20, 24, 20)
+        layout.setSpacing(8)
+
+        titulo = QLabel("👥 Contactos de confianza")
+        titulo.setObjectName("titulo")
+        layout.addWidget(titulo)
+        subtitulo = QLabel("Guarda familiares o cuidadores. Jarvis no enviará mensajes desde este apartado.")
+        subtitulo.setObjectName("sub")
+        subtitulo.setWordWrap(True)
+        layout.addWidget(subtitulo)
+
+        self._nombre = QLineEdit()
+        self._nombre.setPlaceholderText("Nombre del contacto")
+        self._correo = QLineEdit()
+        self._correo.setPlaceholderText("Correo electrónico (opcional)")
+        self._telefono = QLineEdit()
+        self._telefono.setPlaceholderText("Número de teléfono (opcional)")
+        for campo in (self._nombre, self._correo, self._telefono):
+            layout.addWidget(campo)
+
+        canal_layout = QHBoxLayout()
+        canal_layout.addWidget(QLabel("Canal preferido"))
+        self._canal = QComboBox()
+        self._canal.addItem("Correo", "correo")
+        self._canal.addItem("Teléfono", "telefono")
+        self._canal.addItem("WhatsApp", "whatsapp")
+        canal_layout.addWidget(self._canal)
+        layout.addLayout(canal_layout)
+
+        botones = QHBoxLayout()
+        guardar = QPushButton("💾 Guardar contacto")
+        guardar.clicked.connect(self._guardar)
+        actualizar = QPushButton("↻ Actualizar lista")
+        actualizar.clicked.connect(self._actualizar)
+        botones.addWidget(guardar)
+        botones.addWidget(actualizar)
+        layout.addLayout(botones)
+
+        self._lista = QLabel()
+        self._lista.setWordWrap(True)
+        self._lista.setStyleSheet("color:#ccd6f6;font-size:13px;padding-top:8px;")
+        layout.addWidget(self._lista)
+        layout.addStretch()
+        self._actualizar()
+
+    def _guardar(self):
+        nombre = self._nombre.text().strip()
+        correo = self._correo.text().strip()
+        telefono = self._telefono.text().strip()
+        destino = correo or telefono
+        if not nombre or not destino:
+            self._lista.setText("Escribe un nombre y un correo o número de teléfono.")
+            return
+        agent_notas.contacto_confianza_guardar(
+            nombre=nombre, destino=destino, canal=self._canal.currentData(),
+            correo=correo, telefono=telefono,
+        )
+        self._nombre.clear()
+        self._correo.clear()
+        self._telefono.clear()
+        self._actualizar()
+
+    def _actualizar(self):
+        try:
+            with agent_notas._get_conn() as conn:
+                rows = conn.execute(
+                    "SELECT nombre, correo, telefono, canal FROM contactos_confianza ORDER BY nombre"
+                ).fetchall()
+            if not rows:
+                self._lista.setText("No hay contactos de confianza guardados.")
+                return
+            lineas = ["Contactos guardados:"]
+            for row in rows:
+                datos = []
+                if row["correo"]:
+                    datos.append(row["correo"])
+                if row["telefono"]:
+                    datos.append(row["telefono"])
+                lineas.append(f"• {row['nombre']}: {' · '.join(datos)} · preferido: {row['canal']}")
+            self._lista.setText("\n".join(lineas))
+        except Exception as exc:
+            self._lista.setText(f"No se pudo cargar la lista: {exc}")
+
+
 class VentanaConfig(QDialog):
     def __init__(self, parent=None):
         super().__init__(parent)
@@ -5593,6 +6594,7 @@ class VentanaConfig(QDialog):
         _seccion("🔗 Integración Google")
         self._chks = []
         self._chks.append(_chk("📅 Google Calendar (eventos y reuniones)", "google_calendar", True))
+        self._chks.append(_chk("🔔 Avisar 15 minutos antes de eventos", "avisos_calendar_activados", True))
         self._chks.append(_chk("📋 Google Tasks (tareas)", "google_tasks", True))
         self._chks.append(_chk("📧 Gmail (correos)", "google_gmail", True))
         self._chks.append(_chk("📂 Google Drive (archivos)", "google_drive", True))
@@ -5670,6 +6672,7 @@ class VentanaConfig(QDialog):
             "QTabBar::tab:selected { background: #0d4a90; color: white; }"
         )
         pestañas.addTab(scroll, "⚙ General")
+        pestañas.addTab(VentanaContactosConfianza(self), "👥 Confianza")
         pestañas.addTab(VentanaComandos(self), "⌘ Comandos")
         pestañas.addTab(VentanaExtensiones(self), "🔌 Extensiones")
 
@@ -5707,6 +6710,7 @@ class VentanaConfig(QDialog):
         """Restablecer todos a valores por defecto."""
         _DEFAULTS = {
             "google_calendar": True, "google_tasks": True, "google_gmail": True,
+            "avisos_calendar_activados": True,
             "google_drive": True, "google_contacts": True, "google_maps": True,
             "mapa_interno": True, "nominatim_geo": True, "anillos_interfaz": False, "guardar_historial": True,
             "guardar_memoria_usuario": True, "notas_auto": True,
@@ -5938,7 +6942,7 @@ class VentanaExtensiones(QDialog):
     @staticmethod
     def _autorizar_google(clave):
         try:
-            credenciales = agent_google._obtener_credenciales()
+            agent_google._obtener_credenciales()
             conectado, texto = _estado_extension(clave)
             _bridge.extension_auth_result.emit(clave, conectado, texto)
         except Exception as exc:
@@ -6188,6 +7192,7 @@ class JarvisUI(QWidget):
         # ── Conectar bridge ───────────────────────────────────────────────────
         _bridge.append_html.connect(self._agregar_html)
         _bridge.append_to_v5_chat.connect(_ejecutar_js_v5)
+        _bridge.status_changed.connect(self._actualizar_estado)
         _bridge.append_to_v5_map.connect(_ejecutar_js_mapa_v5)
         _bridge.scroll_down.connect(self._scroll)
         _bridge.quit_app.connect(self.close)
@@ -6201,6 +7206,10 @@ class JarvisUI(QWidget):
     def _toggle_chat(self):
         self._chat_visible = not self._chat_visible
         self._chat_panel.setVisible(self._chat_visible)
+
+    def _actualizar_estado(self, estado: str):
+        titulo = "Jarvis - Procesando" if estado == "processing" else "Jarvis"
+        self.setWindowTitle(titulo)
 
     def _agregar_html(self, html: str):
         """Inserta HTML de forma incremental — no reconstruye el documento completo."""

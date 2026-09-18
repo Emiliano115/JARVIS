@@ -1,36 +1,23 @@
-/.venv_build/
-/.venv_gestos/
-/.vs/
-/__pycache__/
-/build/
-/dist/
-
-# Credenciales y secretos
+.venv/
+.venv_build/
+.venv_gestos/
+.vscode/
+.vs/
+__pycache__/
+*.pyc
+*.pyo
+*.log
+API_KEYS.ENV
 .env
 token.json
-credentials.json
-groq_keys.txt
-jarvis_tokens.json
-
-# Datos personales y memoria local
-jarvis_config.json
+*.zip
+build/
+dist/
+release/
+jarvis_memoria*.json
 jarvis_historial.json
-jarvis_identidad.json
-jarvis_memoria.json
-jarvis_patrones.json
-jarvis_modos.json
 memoria_*.json
-memoria_*.txt
-memoria_apps.txt
-memoria_archivos.txt
-memoria_microfono.txt
+jarvis_config.json
 jarvis_notas.db
 jarvis_vectormem/
-
-# Logs y temporales
-*.log
-debug_run.txt
-gestos_*_log.txt
-input.wav
-*.tmp
-*.bak
+Funciones completas de JARVIS.txt
