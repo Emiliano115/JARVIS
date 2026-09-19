@@ -201,7 +201,7 @@ NVIDIA_TIMEOUT_GLM_SEGUNDOS = 60
 _modelo_preferido = "auto"
 ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_MODEL    = "claude-sonnet-4-20250514"
-JARVIS_VERSION     = "2.0.5"
+JARVIS_VERSION     = "2.1.0"
 JARVIS_GITHUB_REPO = "Emiliano115/JARVIS"
 
 # =============================================================================

@@ -21,3 +21,4 @@ jarvis_config.json
 jarvis_notas.db
 jarvis_vectormem/
 Funciones completas de JARVIS.txt
+Get-ChildItem .\dist
