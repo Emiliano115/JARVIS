@@ -594,10 +594,20 @@ def hay_correo_pendiente() -> bool:
 def resolver_correo_pendiente(comando: str, chat_widget=None) -> bool:
     """Resuelve la confirmación pendiente; devuelve True si consumió el comando."""
     global _correo_pendiente
-    texto = _quitar_tildes(str(comando or "").lower()).strip(" .,!?:;")
+    texto = _quitar_tildes(str(comando or "").lower())
+    # La instrucción visible dice “sí, envíalo”; normaliza sus separadores para
+    # que coincida con la forma de confirmación interna "si envialo".
+    texto = re.sub(r"[,;]+", " ", texto)
+    texto = re.sub(r"\s+", " ", texto).strip(" .!?:;")
     confirmaciones = ("si", "si envialo", "confirmo", "confirmar", "envialo", "enviar")
     cancelaciones = ("no", "cancela", "cancelar", "anula", "anular", "descarta")
-    es_confirmacion = any(texto == opcion or texto.startswith(opcion + " ") for opcion in confirmaciones)
+    confirmaciones_compuestas = (
+        "si envialo", "si enviar", "confirmo", "confirmar", "adelante",
+        "hazlo", "ejecuta", "envialo", "enviar",
+    )
+    es_confirmacion = texto in confirmaciones or any(
+        texto.startswith(opcion + " ") for opcion in confirmaciones_compuestas
+    )
     es_cancelacion = any(texto == opcion or texto.startswith(opcion + " ") for opcion in cancelaciones)
     if not es_confirmacion and not es_cancelacion:
         return False

@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Any, Dict, Iterable, List, Optional
 from urllib.parse import urlsplit, urlunsplit
 
@@ -20,6 +21,27 @@ DEFAULT_PROVIDER_ORDER = [
     "deepseek",
     "ollama",
 ]
+
+
+def _redact_sensitive_text(value: Any) -> str:
+    """Oculta credenciales que puedan aparecer en URLs o errores de proveedores."""
+    text = str(value or "")
+    text = re.sub(
+        r"(?i)([?&](?:api[_-]?key|key|access[_-]?token|token|secret|password)=)[^&#\s\"']+",
+        r"\1[REDACTED]",
+        text,
+    )
+    text = re.sub(
+        r"(?i)\b(api[_-]?key|access[_-]?token|token|secret|password)\s*([=:])\s*[\"']?([^\s,;&\"'<>]+)",
+        r"\1\2[REDACTED]",
+        text,
+    )
+    text = re.sub(
+        r"(?i)\b(authorization\s*[:=]\s*)(?:bearer\s+)?[^\s,;]+",
+        r"\1[REDACTED]",
+        text,
+    )
+    return text
 
 
 def _provider_default_models(provider_name: str) -> List[str]:
@@ -553,7 +575,7 @@ class AIProviderManager:
                     last_exc = RuntimeError(f"{provider_name} no soporta el modelo {model_name} (404)")
                     continue
                 if response.status_code >= 400:
-                    body = response.text[:400].replace("\n", " ")
+                    body = _redact_sensitive_text(response.text[:400].replace("\n", " "))
                     print(f"[AI Provider] {provider_name} HTTP {response.status_code} con modelo {model_name}: {body}")
                     last_exc = RuntimeError(f"{provider_name} devolvió HTTP {response.status_code} para {model_name}: {body}")
                     continue
@@ -595,7 +617,7 @@ class AIProviderManager:
                     last_exc = RuntimeError(f"{provider_name} no soporta el modelo {model_name} (404)")
                     continue
                 if response.status_code >= 400:
-                    body = response.text[:400].replace("\n", " ")
+                    body = _redact_sensitive_text(response.text[:400].replace("\n", " "))
                     print(f"[AI Provider] {provider_name} HTTP {response.status_code} con modelo {model_name}: {body}")
                     last_exc = RuntimeError(f"{provider_name} devolvió HTTP {response.status_code} para {model_name}: {body}")
                     continue
@@ -722,7 +744,7 @@ class AIProviderManager:
                     print(f"[IA] Respuesta generada con: {provider_name} | modelo={self.last_model_name or 'desconocido'}")
                     return result.strip()
             except Exception as exc:  # pragma: no cover - robust fallback
-                print(f"[AI Provider] {provider_name} falló: {exc}")
+                print(f"[AI Provider] {provider_name} falló: {_redact_sensitive_text(exc)}")
         raise RuntimeError("No hay ningún proveedor activo y con API key disponible.")
 
     def normalized_config(self) -> Dict[str, Any]:
