@@ -1,14 +1,41 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
   <defs>
-    <linearGradient id="core" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0" stop-color="#74f0ff"/>
-      <stop offset="1" stop-color="#1684d8"/>
+    <linearGradient id="background" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#071a2b"/>
+      <stop offset="0.55" stop-color="#06101f"/>
+      <stop offset="1" stop-color="#020812"/>
     </linearGradient>
+    <linearGradient id="metal" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#e9fdff"/>
+      <stop offset="0.28" stop-color="#7eeaff"/>
+      <stop offset="0.72" stop-color="#2aa9e8"/>
+      <stop offset="1" stop-color="#1162b5"/>
+    </linearGradient>
+    <radialGradient id="core" cx="50%" cy="45%" r="60%">
+      <stop offset="0" stop-color="#eaffff"/>
+      <stop offset="0.35" stop-color="#68eaff"/>
+      <stop offset="1" stop-color="#087bc5"/>
+    </radialGradient>
+    <filter id="glow" x="-50%" y="-50%" width="200%" height="200%">
+      <feGaussianBlur stdDeviation="2.2" result="blur"/>
+      <feMerge><feMergeNode in="blur"/><feMergeNode in="SourceGraphic"/></feMerge>
+    </filter>
   </defs>
-  <rect width="128" height="128" rx="28" fill="#061321"/>
-  <circle cx="64" cy="64" r="45" fill="none" stroke="#1c668f" stroke-width="3" opacity=".8"/>
-  <path d="M39 35h51v12H53v38c0 8-5 12-14 12v-12c3 0 4-1 4-4V35z" fill="url(#core)"/>
-  <circle cx="82" cy="75" r="8" fill="#dffcff"/>
-  <circle cx="82" cy="75" r="15" fill="none" stroke="#40d9f5" stroke-width="2" opacity=".65"/>
-  <path d="M19 64h14M95 64h14M64 19v14M64 95v14" stroke="#40d9f5" stroke-width="3" stroke-linecap="round"/>
+
+  <rect x="2" y="2" width="124" height="124" rx="30" fill="url(#background)" stroke="#1d668d" stroke-width="2"/>
+  <path d="M18 39V25a7 7 0 0 1 7-7h14M110 39V25a7 7 0 0 0-7-7H89M18 89v14a7 7 0 0 0 7 7h14M110 89v14a7 7 0 0 1-7 7H89" fill="none" stroke="#2aa9d5" stroke-width="2" stroke-linecap="round" opacity=".75"/>
+
+  <circle cx="64" cy="64" r="45" fill="none" stroke="#1e628e" stroke-width="1.5" opacity=".8"/>
+  <ellipse cx="64" cy="64" rx="49" ry="18" fill="none" stroke="#2abde8" stroke-width="1.5" opacity=".55" transform="rotate(-28 64 64)"/>
+  <ellipse cx="64" cy="64" rx="49" ry="18" fill="none" stroke="#164a72" stroke-width="1.5" opacity=".7" transform="rotate(28 64 64)"/>
+  <circle cx="64" cy="64" r="31" fill="#04101d" stroke="#43d9f4" stroke-width="2" opacity=".98"/>
+
+  <path d="M48 38h35v9H58v26c0 9-5 14-15 14h-4v-9h3c4 0 6-2 6-6V38z" fill="url(#metal)" filter="url(#glow)"/>
+  <path d="M39 87h12" stroke="#b9f8ff" stroke-width="3" stroke-linecap="round" opacity=".9"/>
+  <circle cx="76" cy="67" r="8" fill="url(#core)" filter="url(#glow)"/>
+  <circle cx="76" cy="67" r="3" fill="#ffffff"/>
+
+  <path d="M64 13v8M64 107v8M13 64h8M107 64h8" stroke="#5ce4f5" stroke-width="2" stroke-linecap="round"/>
+  <circle cx="31" cy="37" r="2" fill="#8cefff"/>
+  <circle cx="98" cy="91" r="2" fill="#8cefff"/>
 </svg>

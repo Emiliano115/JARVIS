@@ -6,7 +6,7 @@
 <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
 <meta http-equiv="Pragma" content="no-cache">
 <meta http-equiv="Expires" content="0">
-<title>Jarvis — Asistente personal</title>
+<title>JARVIS — Interface V5</title>
 <link rel="icon" type="image/svg+xml" href="jarvis_logo.svg">
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" crossorigin="" />
 <script>
@@ -20,21 +20,33 @@
 </script>
   <style>
   :root {
-    --primary: #8bc9d7;
-    --secondary: #edf1f7;
-    --muted: #9aa8ba;
-    --panel: rgba(15, 19, 27, 0.88);
-    --panel-strong: rgba(17, 22, 31, 0.97);
-    --panel-soft: rgba(23, 29, 39, 0.78);
-    --line: rgba(177, 194, 218, 0.14);
-    --glow: rgba(139, 201, 215, 0.2);
-    --bg: radial-gradient(ellipse at 50% 40%, #111923 0%, #0b0f15 44%, #080a0f 100%);
+    --primary: #67d9ff;
+    --secondary: #eaf5ff;
+    --muted: #8aa6c2;
+    --panel: rgba(8, 16, 28, 0.84);
+    --panel-strong: rgba(11, 21, 35, 0.96);
+    --panel-soft: rgba(14, 26, 41, 0.72);
+    --line: rgba(111, 169, 255, 0.18);
+    --glow: rgba(103, 217, 255, 0.35);
+    --bg: radial-gradient(ellipse at top, rgba(15,32,52,0.9) 0%, rgba(4,8,16,0.96) 32%, rgba(1,3,8,1) 100%);
   }
-  body { margin:0; height:100vh; overflow:hidden; background: var(--bg); color: var(--secondary); font-family: 'Segoe UI', Inter, system-ui, -apple-system, sans-serif; font-size:14px; text-rendering: optimizeLegibility; -webkit-font-smoothing: antialiased; }
+  body { margin:0; height:100vh; background: var(--bg); color: var(--secondary); }
   * { -webkit-tap-highlight-color: transparent; }
-  ::selection { background: rgba(139,201,215,.24); color: #fff; }
-  button, input, select { font: inherit; }
-  :focus-visible { outline: 2px solid var(--primary); outline-offset: 3px; }
+  *:focus, *:focus-visible, *:hover { outline: none !important; box-shadow: none !important; }
+  ::selection { background: transparent; color: inherit; }
+  button, a, input, textarea, [tabindex], .bottom-btn, .chat-send, .mic-btn, #mapa-close { outline: none !important; box-shadow: none !important; }
+  button:hover, button:focus, button:focus-visible, a:hover, a:focus, a:focus-visible,
+  input:hover, input:focus, input:focus-visible, textarea:hover, textarea:focus, textarea:focus-visible {
+    outline: none !important;
+    box-shadow: none !important;
+    filter: none !important;
+  }
+  button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible { outline: none !important; box-shadow: none !important; }
+  button:focus-visible, a:focus-visible, input:focus-visible, textarea:focus-visible {
+    outline: 2px solid #4db8ff !important;
+    outline-offset: 3px;
+  }
+  .bottom-btn, .chat-send, .mic-btn, #mapa-close, .chat-input { outline: none !important; }
   #hud-tl, #hud-tr, #hud-bl, #hud-br { display: none !important; opacity: 0 !important; visibility: hidden !important; }
 
   /* ── Cursor Normal ── */
@@ -49,7 +61,7 @@ body { cursor: auto; }
 .scan-line-h {
   position: absolute; top: -10%; left: 0; width: 100%; height: 3px;
   background: var(--primary);
-  box-shadow: 0 0 34px 10px rgba(139,201,215,0.38), 0 0 8px 1px rgba(255,255,255,.7);
+  box-shadow: 0 0 50px 15px rgba(0,212,255,0.8), 0 0 10px 2px #fff;
   animation: scanH 3.5s cubic-bezier(0.4, 0, 0.2, 1) forwards;
 }
 @keyframes scanH { 0% { top:-10%; opacity:0; } 10% { opacity:1; } 85% { opacity:1; } 100% { top:110%; opacity:0; } }
@@ -70,8 +82,7 @@ canvas#bg { position:fixed; inset:0; z-index:0; pointer-events:none; }
 /* ── Ambient scanline overlay ── */
 body::after {
   content:''; position:fixed; inset:0; z-index:1; pointer-events:none;
-  background: repeating-linear-gradient(0deg, transparent, transparent 3px, rgba(0,0,0,0.018) 3px, rgba(0,0,0,0.018) 4px);
-  opacity:.3;
+  background: repeating-linear-gradient(0deg, transparent, transparent 2px, rgba(0,0,0,0.02) 2px, rgba(0,0,0,0.02) 4px);
 }
 
 /* ── Main wrap ── */
@@ -90,13 +101,14 @@ body::after {
 /* ── Status bar ── */
 .status-bar {
   position: fixed; top: 24px; left: 50%; transform: translateX(-50%); z-index: 10;
-  display: flex; align-items: center; gap: 14px; padding: 9px 16px;
-  border-radius: 999px; border: 1px solid var(--line);
-  background: rgba(13,17,24,.82); backdrop-filter: blur(14px);
-  box-shadow: 0 10px 30px rgba(0,0,0,.2);
-  font-size: 9px; letter-spacing: 1.6px; color: #a6b3c2;
+  display: flex; align-items: center; gap: 18px; padding: 9px 18px;
+  border-radius: 999px; border: 1px solid rgba(103,217,255,0.2);
+  background: linear-gradient(180deg, rgba(9,18,31,0.8), rgba(4,10,19,0.75)); backdrop-filter: blur(12px);
+  box-shadow: 0 0 0 1px rgba(103,217,255,0.05), 0 12px 32px rgba(0, 0, 0, 0.28), 0 0 28px rgba(103,217,255,0.08);
+  font-size: 8px; letter-spacing: 3px; color: rgba(103,217,255,0.72);
+  text-shadow: 0 0 8px rgba(103,217,255,0.3);
 }
-.status-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--primary); box-shadow: 0 0 4px rgba(139,201,215,.35); animation: none; }
+.status-dot { width: 5px; height: 5px; border-radius: 50%; background: var(--primary); box-shadow: 0 0 6px var(--primary); animation: none; }
   .status-bar.processing .status-dot { background: #ffaa44; box-shadow: 0 0 9px #ffaa44; animation: pulse-dot 0.8s infinite; }
   .status-bar.processing #statusText { color: #ffaa44; }
 @keyframes pulse-dot { 0%,100% { opacity:1; transform:scale(1); } 50% { opacity:0.4; transform:scale(0.7); } }
@@ -105,8 +117,8 @@ body::after {
 .bottom-bar {
   position: fixed; z-index: 100; left: 50%; bottom: 22px; transform: translateX(-50%);
   display: flex; align-items: center; justify-content: center; gap: 10px; pointer-events: auto;
-  padding: 10px 14px; border: 1px solid rgba(177,194,218,0.14); border-radius: 18px;
-  background: rgba(13,17,24,0.82); backdrop-filter: blur(16px);
+  padding: 10px 14px; border: 1px solid rgba(126,173,255,0.14); border-radius: 20px;
+  background: rgba(7,13,24,0.78); backdrop-filter: blur(16px);
   box-shadow: 0 18px 40px rgba(0,0,0,0.3), inset 0 1px 0 rgba(255,255,255,0.04);
   transition: opacity .22s ease, transform .22s ease, background .22s ease;
 }
@@ -115,9 +127,9 @@ body::after {
 .bottom-bar[data-position="right"] { left: auto; right: 18px; top: 50%; bottom: auto; transform: translateY(-50%); flex-direction: column; }
 .bottom-btn {
   width: 44px; height: 44px; border-radius: 14px;
-  background: linear-gradient(180deg, rgba(25,31,41,0.95), rgba(17,22,30,0.95));
-  border: 1px solid rgba(177,194,218,0.16);
-  color: #a9d6df;
+  background: linear-gradient(180deg, rgba(13,24,38,0.95), rgba(7,13,22,0.95));
+  border: 1px solid rgba(103,217,255,0.18);
+  color: rgba(103,217,255,0.9);
   cursor: pointer;
   display: inline-flex; align-items: center; justify-content: center;
   transition: transform 0.18s ease, box-shadow 0.18s ease, border-color 0.18s ease, background 0.18s ease;
@@ -126,17 +138,11 @@ body::after {
 }
 .bottom-btn svg { width: 22px; height: 22px; fill: rgba(103,217,255,0.95); transition: fill 0.18s ease; }
 .bottom-btn span { display: none; }
-.bottom-btn::after { content:attr(title); position:absolute; left:50%; bottom:calc(100% + 9px); transform:translate(-50%,4px); opacity:0; pointer-events:none; white-space:nowrap; padding:6px 9px; border:1px solid var(--line); border-radius:8px; background:#141a23; color:#e2e8f0; font:11px 'Segoe UI',sans-serif; letter-spacing:0; box-shadow:0 8px 20px rgba(0,0,0,.25); transition:opacity .15s ease,transform .15s ease; }
-.bottom-btn:hover::after,.bottom-btn:focus-visible::after { opacity:1; transform:translate(-50%,0); }
-.bottom-bar[data-position="left"] .bottom-btn::after { left:calc(100% + 8px); bottom:auto; transform:translate(-4px,-50%); top:50%; }
-.bottom-bar[data-position="right"] .bottom-btn::after { left:auto; right:calc(100% + 8px); bottom:auto; transform:translate(4px,-50%); top:50%; }
-.bottom-bar[data-position="top"] .bottom-btn::after { top:calc(100% + 9px); bottom:auto; }
-.bottom-bar[data-position="left"] .bottom-btn:hover::after,.bottom-bar[data-position="left"] .bottom-btn:focus-visible::after,.bottom-bar[data-position="right"] .bottom-btn:hover::after,.bottom-bar[data-position="right"] .bottom-btn:focus-visible::after { transform:translate(0,-50%); }
 .bottom-btn:hover {
-  background: linear-gradient(180deg, rgba(34,43,55,0.98), rgba(21,28,38,0.98));
-  border-color: rgba(139,201,215,0.42);
+  background: linear-gradient(180deg, rgba(16,35,56,0.98), rgba(8,17,29,0.98));
+  border-color: rgba(103,217,255,0.45);
   color: #ffffff;
-  box-shadow: 0 0 12px rgba(139,201,215,0.1), inset 0 0 12px rgba(139,201,215,0.05);
+  box-shadow: 0 0 18px rgba(103,217,255,0.2), inset 0 0 16px rgba(103,217,255,0.08);
 }
 .bottom-btn:hover svg { fill: #ffffff; filter: drop-shadow(0 0 4px #67d9ff); }
 .bottom-btn:active { transform: scale(0.96); }
@@ -144,14 +150,14 @@ body::after {
 .bottom-btn.danger svg { fill: rgba(255,80,100,0.8); }
 .bottom-btn.danger:hover { background: rgba(255,40,60,0.14); border-color: rgba(255,51,80,0.8); color: #ff3355; box-shadow: 0 0 20px rgba(255,40,60,0.25); }
 .bottom-btn.danger:hover svg { fill: #ff3355; filter: drop-shadow(0 0 4px #ff3355); }
-.bottom-btn::before { display:none; }
+.bottom-btn::before, .bottom-btn::after { display: none; }
 
 /* ── Chat Container ── */
 .chat-container {
   position: fixed; top: 50%; left: 50%; transform: translate(-50%, -50%) scale(0.96);
-  width: min(94vw, 1400px); height: min(88vh, 880px); background: linear-gradient(180deg, rgba(15,19,27,.99), rgba(10,13,19,.99));
-  border: 1px solid rgba(177,194,218,.17);
-  box-shadow: 0 26px 80px rgba(0,0,0,.42), 0 0 0 1px rgba(255,255,255,.025);
+  width: min(94vw, 1400px); height: min(88vh, 880px); background: linear-gradient(180deg, rgba(4, 10, 21, 0.98), rgba(3, 8, 16, 0.98));
+  border: 1px solid rgba(103,217,255,0.22);
+  box-shadow: 0 26px 80px rgba(0, 0, 0, 0.45), 0 0 0 1px rgba(103,217,255,0.06), inset 0 0 50px rgba(103,217,255,0.03);
   z-index: 40; opacity: 0; pointer-events: none; display: flex; flex-direction: column;
   transition: opacity 0.5s ease, transform 0.5s cubic-bezier(0.4, 0, 0.2, 1);
   border-radius: 22px;
@@ -159,7 +165,7 @@ body::after {
   will-change: transform, opacity;
 }
 .chat-container::before {
-  content: ''; position: absolute; inset: 0; background: radial-gradient(circle at top, rgba(139,201,215,.035), transparent 48%);
+  content: ''; position: absolute; inset: 0; background: radial-gradient(circle at top, rgba(103,217,255,0.08), transparent 45%);
   pointer-events: none;
 }
 .chat-container.active {
@@ -168,8 +174,9 @@ body::after {
 }
 
 .chat-header {
-  padding: 16px 24px; font-size: 12px; font-weight:600; letter-spacing:1.7px; color:#d6e2ec; border-bottom: 1px solid var(--line);
-  display: flex; justify-content: space-between; align-items: center; background:rgba(255,255,255,.018);
+  padding: 16px 28px; font-size: 11px; letter-spacing: 4px; color: var(--primary); border-bottom: 1px solid rgba(103,217,255,0.15);
+  display: flex; justify-content: space-between; align-items: center; background: linear-gradient(90deg, rgba(103,217,255,0.08), rgba(103,217,255,0.02), transparent 80%);
+  text-shadow: 0 0 12px rgba(103,217,255,0.5);
 }
 .chat-close { cursor: pointer; color: rgba(255,255,255,0.56); font-size: 18px; transition: 0.2s ease; }
 .chat-close:hover { color: #ff3366; text-shadow: 0 0 15px #ff3366; transform: rotate(90deg) scale(1.15); }
@@ -185,9 +192,11 @@ body::after {
   -webkit-mask-image: linear-gradient(to bottom, transparent 0%, black 8%, black 92%, transparent 100%);
   mask-image: linear-gradient(to bottom, transparent 0%, black 8%, black 92%, transparent 100%);
 }
-.chat-messages::-webkit-scrollbar { width: 5px; } .chat-messages::-webkit-scrollbar-track { background: transparent; } .chat-messages::-webkit-scrollbar-thumb { background: rgba(139,201,215,0.22); border-radius: 8px; }
+.chat-messages::-webkit-scrollbar { width: 4px; } .chat-messages::-webkit-scrollbar-track { background: transparent; } .chat-messages::-webkit-scrollbar-thumb { background: rgba(0,212,255,0.3); border-radius: 2px; }
 
-.msg { max-width:min(78%, 820px); padding:16px 20px; font-size:14px; line-height:1.7; border-radius:17px; position:relative; letter-spacing:0; }
+.msg {
+  max-width: 70%; padding: 15px 18px; font-size: 14px; line-height: 1.6; border-radius: 16px; position: relative; letter-spacing: 0.2px;
+}
 .msg.user { align-self: flex-end; background: linear-gradient(180deg, rgba(17, 40, 62, 0.96), rgba(11, 23, 38, 0.9)); border: 1px solid rgba(103,217,255,0.16); border-right: 3px solid var(--primary); color: var(--secondary); box-shadow: 0 10px 22px rgba(5,9,16,0.3); }
 .msg.ai { align-self: flex-start; background: rgba(255, 255, 255, 0.04); border: 1px solid rgba(103,217,255,0.1); border-left: 3px solid var(--primary); color: rgba(255, 255, 255, 0.9); box-shadow: 0 10px 22px rgba(5,9,16,0.2); }
 .msg table { width: 100%; border-collapse: collapse; margin: 8px 0; font-size: 13px; }
@@ -197,11 +206,11 @@ body::after {
 .msg ul { margin: 6px 0; padding-left: 18px; }
 .msg li { margin: 4px 0; }
 
-.msg-time { font-size:10px; color:#748395; position:absolute; bottom:-17px; }
+.msg-time { font-size: 9px; color: rgba(0,212,255,0.5); position: absolute; bottom: -16px; }
 .msg.user .msg-time { right: 0; } .msg.ai .msg-time { left: 0; }
 .ai-typing-cursor { display: inline-block; width: 8px; height: 14px; background: var(--primary); animation: blink 0.8s infinite; vertical-align: middle; margin-left: 5px; box-shadow: 0 0 8px var(--primary);}
 
-.chat-input-area { padding:16px 20px; border-top:1px solid var(--line); display:flex; gap:12px; background:rgba(12,16,23,.94); }
+.chat-input-area { padding: 18px 24px; border-top: 1px solid rgba(103,217,255,0.12); display: flex; gap: 12px; background: rgba(3, 8, 14, 0.82); }
 .model-picker { position: relative; flex: 0 0 auto; align-self: center; }
 .model-picker select {
   appearance: none; min-width: 150px; height: 40px; padding: 0 30px 0 14px;
@@ -212,9 +221,9 @@ body::after {
 .model-picker::after { content:'⌄'; position:absolute; right:13px; top:10px; color:var(--primary); pointer-events:none; font-size:16px; }
 .model-picker select:hover, .model-picker select:focus { border-color: var(--primary); background: rgba(32, 62, 85, 0.5); }
 .model-picker select option { background: #071523; color: #dfefff; }
-.chat-input { flex:1; min-width:0; background:rgba(23,29,39,.85); border:1px solid var(--line); border-radius:13px; outline:none; color:var(--secondary); font-family:inherit; font-size:14px; padding:12px 15px; transition:border-color .2s ease,background .2s ease; cursor:text; }
-.chat-input:focus { border-color:rgba(139,201,215,.5); background:rgba(27,34,45,.98); box-shadow:0 0 0 3px rgba(139,201,215,.07); }
-.chat-send { background:rgba(139,201,215,.13); border:1px solid rgba(139,201,215,.32); color:#c3e4e8; padding:0 20px; height:42px; border-radius:12px; font-family:inherit; font-size:11px; font-weight:600; cursor:pointer; transition:.2s ease; letter-spacing:1.2px;}
+.chat-input { flex: 1; background: rgba(17, 27, 39, 0.9); border: 1px solid rgba(103,217,255,0.12); border-radius: 14px; outline: none; color: var(--secondary); font-family: 'Share Tech Mono', monospace; font-size: 15px; padding: 12px 14px; transition: 0.2s ease; cursor: text; }
+.chat-input:focus { border-color: rgba(103,217,255,0.5); box-shadow: 0 0 0 3px rgba(103,217,255,0.08); letter-spacing: 0.2px; }
+.chat-send { background: linear-gradient(180deg, rgba(17,37,58,0.98), rgba(10,24,37,0.98)); border: 1px solid rgba(103,217,255,0.38); color: var(--primary); padding: 0 22px; height: 40px; border-radius: 12px; font-family: inherit; font-size: 11px; cursor: pointer; transition: 0.2s ease; letter-spacing: 2px;}
 .chat-send:hover { background: rgba(26, 63, 86, 0.7); color: #dff7ff; box-shadow: 0 0 18px rgba(103,217,255,0.14); }
 
 @media (max-width: 700px) {
@@ -233,22 +242,16 @@ body::after {
   .bottom-bar[data-position="right"] { right: 8px; left:auto; }
   .bottom-bar[data-position="top"] { top: 8px; left: 8px; }
   .bottom-btn { width: 40px; height: 40px; border-radius: 12px; }
-  .msg { max-width:90%; }
-  .chat-tools-menu { top:56px; right:10px; }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  *, *::before, *::after { scroll-behavior:auto !important; animation-duration:.01ms !important; animation-iteration-count:1 !important; transition-duration:.01ms !important; }
 }
 
 #main { display:block; transition: transform 0.1s ease-out; }
 
 .bottom-btn.active {
-  border-color: rgba(139,201,215,0.55);
-  background: rgba(139,201,215,0.14);
-  box-shadow: 0 0 12px rgba(139,201,215,0.12);
+  border-color: rgba(0,212,255,0.9);
+  background: rgba(0,212,255,0.15);
+  box-shadow: 0 0 20px rgba(0,212,255,0.4);
 }
-.bottom-btn.active svg { fill: #fff; }
+.bottom-btn.active svg { fill: #fff; filter: drop-shadow(0 0 4px #00d4ff); }
 
 .voice-bars { display: flex; align-items: center; gap: 3px; height: 18px; margin-top: 16px; opacity: 0; transition: none; }
 .voice-bars.active { opacity: 1; }
@@ -270,23 +273,23 @@ body::after {
 }
 #mapa-header {
   position: absolute; top: 0; left: 0; right: 0; z-index: 1000;
-  background: rgba(14,18,25,0.94); border-bottom: 1px solid var(--line);
+  background: rgba(0,4,12,0.88); border-bottom: 1px solid rgba(0,180,255,0.3);
   padding: 9px 20px; display: flex; justify-content: space-between; align-items: center;
-  font-family: inherit; font-size: 12px; letter-spacing: 1.5px;
-  color: #d8e1eb;
+  font-family: 'Share Tech Mono', monospace; font-size: 11px; letter-spacing: 3px;
+  color: rgba(0,212,255,0.9); text-shadow: 0 0 12px rgba(0,212,255,0.7);
   backdrop-filter: blur(6px);
 }
 #mapa-close {
-  background: rgba(255,255,255,.025); border: 1px solid var(--line); color: #bac5d2;
-  font-family: inherit; font-size: 11px; letter-spacing: .5px;
-  padding: 7px 14px; border-radius:9px; cursor:pointer; transition:all .2s ease;
+  background: none; border: 1px solid rgba(255,51,102,0.45); color: rgba(255,80,120,0.85);
+  font-family: 'Share Tech Mono', monospace; font-size: 10px; letter-spacing: 2px;
+  padding: 4px 14px; cursor: pointer; transition: all 0.3s;
 }
-#mapa-close:hover { background:rgba(255,255,255,.07); color:#fff; }
-#mapa-div { width:100%; height:100%; padding-top:38px; box-sizing:border-box; background:#0b1017; }
+#mapa-close:hover { background: rgba(255,51,102,0.18); color: #ff3366; box-shadow: 0 0 12px rgba(255,51,102,0.4); }
+#mapa-div { width: 100%; height: 100%; padding-top: 38px; box-sizing: border-box; background: linear-gradient(180deg, #02070e 0%, #04111d 100%); }
 #mapa-sidebar {
   position: absolute; top: 38px; right: 0; height: calc(100% - 38px); width: 320px;
-  background:linear-gradient(180deg,rgba(17,22,31,.98),rgba(11,15,22,.98));
-  border-left:1px solid var(--line); box-shadow:-10px 0 30px rgba(0,0,0,.32);
+  background: linear-gradient(180deg, rgba(2,8,18,0.98), rgba(0,2,8,0.96));
+  border-left: 1px solid rgba(0,212,255,0.06); box-shadow: -10px 0 30px rgba(0,0,0,0.6);
   padding: 12px; box-sizing: border-box; overflow-y: auto; z-index: 760;
   display: none; gap: 8px;
 }
@@ -351,14 +354,14 @@ body::after {
 </div>
 
 <div class="status-bar">
-  <span id="statusText">JARVIS</span><div class="status-dot"></div>
+  <span id="statusText">JARVIS V5</span><div class="status-dot"></div>
   <span id="clockDisplay">00:00:00</span><div class="status-dot"></div>
-  <span>SISTEMA ACTIVO</span>
+  <span>CORE ACTIVE</span>
 </div>
 
 <div class="chat-container" id="chatContainer">
   <div class="chat-header">
-    <span>JARVIS · CONVERSACIÓN</span>
+    <span>CONSOLA NEURAL V5</span>
     <div class="chat-header-actions">
       <button class="chat-tools-toggle" type="button" onclick="toggleChatTools()" aria-label="Mostrar accesos" title="Accesos rápidos">···</button>
       <span class="chat-close" onclick="toggleWindow()">&#10005;</span>
@@ -380,7 +383,7 @@ body::after {
       </select>
     </label>
     <input type="text" class="chat-input" id="chatInput" placeholder="Pregunta lo que quieras..." onkeypress="handleEnter(event)" autocomplete="off">
-    <button class="chat-send" onclick="sendMsg()">ENVIAR</button>
+    <button class="chat-send" onclick="sendMsg()">EJECUTAR</button>
   </div>
 
 
@@ -443,7 +446,7 @@ body::after {
 <div class="wrap" id="mainWrap">
   <canvas id="main" width="750" height="750"></canvas>
 </div>
-<div class="voice-bars" id="voiceBars" style="position:fixed;top:84px;left:50%;transform:translateX(-50%);z-index:100;">
+<div class="voice-bars" id="voiceBars" style="position:fixed;bottom:84px;left:50%;transform:translateX(-50%);z-index:100;">
   <div class="voice-bar"></div><div class="voice-bar"></div><div class="voice-bar"></div><div class="voice-bar"></div><div class="voice-bar"></div>
 </div>
 
@@ -888,14 +891,14 @@ let mouseX = window.innerWidth / 2, mouseY = window.innerHeight / 2;
 let shockwaves = [];
 
 // ── Secuencia de Arranque ──
-const bootLogs = ["> INICIANDO JARVIS...", "> PREPARANDO SERVICIOS...", "> CARGANDO PREFERENCIAS...", "> SESIÓN LISTA."];
+const bootLogs = ["> ESTABLECIENDO ENLACE CUÁNTICO...", "> DESENCRIPTANDO RUTINAS BASE...", "> CARGANDO RED NEURAL CONVOLUCIONAL...", "> PROTOCOLO JARVIS V5.4 EN LÍNEA."];
 const terminal = document.getElementById('boot-terminal'), bootScreen = document.getElementById('boot-screen');
 let systemReady = false;
 
 setTimeout(() => {
   bootScreen.style.opacity = '0'; bootScreen.style.visibility = 'hidden';
   systemReady = true; animate();
-  setTimeout(() => appendMessage("Hola, soy Jarvis. Estoy listo para ayudarte con tus tareas.", 'ai', !window.matchMedia('(prefers-reduced-motion: reduce)').matches), 1000);
+  setTimeout(() => appendMessage("Sistemas operativos al 100%. Protocolos de seguridad activados. A su disposición, señor.", 'ai', true), 1000);
 }, 3500);
 
 let logIndex = 0;
@@ -1119,7 +1122,7 @@ window.addEventListener('DOMContentLoaded', () => {
 
 // ── FONDO: Hexágonos, Plexus, Shockwaves ──
 const bgCanvas = document.getElementById('bg'), bgCtx = bgCanvas.getContext('2d');
-let pColor = "#8bc9d7", sColor = "#ffffff";
+let pColor = "#00d4ff", sColor = "#ffffff";
 let _bgPaused = false;
 
 
@@ -1220,9 +1223,9 @@ let globalSpeed = 0.35, globalScale = 1.0, globalPulse = 1.0;
 const easeOutQuart = t => 1 - (--t)*t*t*t;
 
 const rings = [
-  { r: 64, lw: 2.2, spd: 0.008, dash: [24, 18], glow: true, color: () => `rgba(139,201,215,0.42)` },
-  { r: 104, lw: 1.4, spd: 0.005, dash: [18, 14], glow: false, color: () => `rgba(139,201,215,0.24)` },
-  { r: 150, lw: 1.0, spd: 0.003, dash: [12, 10], glow: false, color: () => `rgba(139,201,215,0.12)` },
+  { r: 64, lw: 2.2, spd: 0.008, dash: [24, 18], glow: true, color: () => `rgba(0,212,255,0.55)` },
+  { r: 104, lw: 1.4, spd: 0.005, dash: [18, 14], glow: false, color: () => `rgba(0,212,255,0.28)` },
+  { r: 150, lw: 1.0, spd: 0.003, dash: [12, 10], glow: false, color: () => `rgba(0,212,255,0.16)` },
 ];
 const ringOffsets = rings.map(() => Math.random() * Math.PI * 2);
 let showRings = false;
@@ -1292,16 +1295,14 @@ function updateClock() {
 }
 setInterval(updateClock, 1000); updateClock();
 
-const reduceMotion = window.matchMedia('(prefers-reduced-motion: reduce)').matches;
 function animate() {
   if(!systemReady) return;
-  if (reduceMotion) boot = 3;
   if(boot < 3) boot += 0.005;
   const rawAmp = getAmp(); ampSmooth += (rawAmp - ampSmooth) * 0.12;
-  if (!_bgPaused && !reduceMotion) updateAndDrawBg();
+  if (!_bgPaused) updateAndDrawBg();
   ctx.clearRect(0,0,W,H);
   drawRings(ampSmooth, boot); drawCore(ampSmooth, boot);
-  if (!reduceMotion) requestAnimationFrame(animate);
+  requestAnimationFrame(animate);
 }
 
 const micBtn = document.getElementById('micBtn'), voiceBars = document.getElementById('voiceBars');

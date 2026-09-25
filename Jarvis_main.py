@@ -51,6 +51,8 @@ except Exception:
 import requests
 import numpy as np
 
+from ai_provider_manager import AIProviderManager, DEFAULT_PROVIDER_ORDER
+
 # Windows-specific
 HAS_WIN32 = importlib.util.find_spec("win32gui") is not None and importlib.util.find_spec("win32con") is not None
 HAS_KEYBOARD = importlib.util.find_spec("keyboard") is not None
@@ -97,9 +99,9 @@ HAS_GOOGLE = (
 from PySide6.QtWidgets import (
     QApplication, QWidget, QVBoxLayout, QTextBrowser, QLineEdit, QPushButton,
     QHBoxLayout, QDialog, QLabel, QScrollArea, QFrame,
-    QGridLayout, QMessageBox, QTabWidget, QComboBox,
+    QGridLayout, QMessageBox, QTabWidget, QComboBox, QCheckBox, QInputDialog,
 )
-from PySide6.QtGui import QFont, QColor, QDesktopServices, QPixmap, QIcon, QPainter
+from PySide6.QtGui import QFont, QColor, QDesktopServices, QPixmap, QIcon, QPainter, QLinearGradient
 from PySide6.QtCore import Qt, Signal, QObject, QTimer, QUrl, QSize, QPoint
 from PySide6.QtWebEngineWidgets import QWebEngineView
 from PySide6.QtWebEngineCore import QWebEngineSettings, QWebEnginePage
@@ -114,6 +116,9 @@ else:
     data_path = base_path
 
 os.makedirs(data_path, exist_ok=True)
+
+PROVIDER_MANAGER = AIProviderManager(os.path.join(data_path, "jarvis_ai_providers.json"))
+PROVIDER_MANAGER.ensure_default()
 
 _LOG_FILE = os.path.join(data_path, "jarvis.log")
 _logger = logging.getLogger("jarvis")
@@ -155,7 +160,8 @@ EXTENSIONES_PERMITIDAS   = {".pdf", ".docx", ".xlsx", ".pptx", ".txt", ".csv",
                              ".mp4", ".mp3", ".png", ".jpg", ".jpeg", ".wav"}
 CARPETAS_IGNORAR         = {"AppData", "Local", "Temp", "Windows", "anaconda3", "node_modules"}
 
-SERVIDOR_AUTH = "https://jarvis-server-j5ze.onrender.com"
+# El flujo de Google OAuth se resuelve de manera 100% local; no se usa Render.
+SERVIDOR_AUTH = None
 
 SCOPES = [
     "https://www.googleapis.com/auth/calendar",
@@ -181,8 +187,6 @@ GROQ_MODEL     = "llama-3.3-70b-versatile"
 GROQ_MODELOS_FALLBACK = [
     GROQ_MODEL,
     "llama-3.1-70b-versatile",
-    "llama-3.1-8b-instant",
-    "meta-llama/llama-4-scout-17b-16e-instruct",
 ]
 NVIDIA_BASE_URL = "https://integrate.api.nvidia.com/v1/chat/completions"
 NVIDIA_EMBEDDINGS_URL = "https://integrate.api.nvidia.com/v1/embeddings"
@@ -192,7 +196,6 @@ NVIDIA_MODELO_MISTRAL = "mistralai/mistral-nemotron"
 NVIDIA_MODELO_VISION = "meta/llama-3.2-11b-vision-instruct"
 NVIDIA_MODELO_TRADUCCION = "nvidia/riva-translate-4b-instruct-v2"
 NVIDIA_MODELOS_FALLBACK = [
-    "openai/gpt-oss-20b",
     NVIDIA_MODELO_RAPIDO,
     NVIDIA_MODELO_MISTRAL,
 ]
@@ -201,7 +204,7 @@ NVIDIA_TIMEOUT_GLM_SEGUNDOS = 60
 _modelo_preferido = "auto"
 ANTHROPIC_BASE_URL = "https://api.anthropic.com/v1/messages"
 ANTHROPIC_MODEL    = "claude-sonnet-4-20250514"
-JARVIS_VERSION     = "2.1.0"
+JARVIS_VERSION     = "2.1.2"
 JARVIS_GITHUB_REPO = "Emiliano115/JARVIS"
 
 # =============================================================================
@@ -222,6 +225,7 @@ def cargar_config() -> dict:
         "guardar_links_apps": True, "guardar_archivos_recientes": True,
         "modo_carga_apps": None, "usar_tts_gratis": True,
         "avisos_calendar_activados": True,
+        "toolbar_position": "bottom",
         "perfil_accesibilidad": "estandar", "lectura_pantalla_max_caracteres": 900,
         "comandos_personalizados": {
             "leer_pantalla": ["lee la pantalla", "modo lectura", "leer el contenido"],
@@ -254,6 +258,8 @@ def validar_config(cfg: dict) -> dict:
     perfil = cfg.get("perfil_accesibilidad", "estandar")
     if perfil not in {"estandar", "breve", "detallada"}:
         cfg["perfil_accesibilidad"] = "estandar"
+    if cfg.get("toolbar_position") not in {"bottom", "left", "right", "top"}:
+        cfg["toolbar_position"] = "bottom"
     try:
         limite = int(cfg.get("lectura_pantalla_max_caracteres", 900))
     except (TypeError, ValueError):
@@ -1141,118 +1147,53 @@ def _leer_env() -> dict:
     return env
 
 def _cargar_keys_desde_servidor() -> dict:
-    """
-    Intenta conectar al servidor de keys con un timeout único de 120s.
-    Render free tier puede tardar 60-90s en despertar desde cold start.
-    Estrategia: ping de wake-up → espera con timeout único (no reintentos múltiples).
-    """
-    url = f"{SERVIDOR_AUTH}/config"
+    """Deshabilita por completo las claves compartidas de servidor/Render.
 
-    # ── Paso 1: ping rápido para despertar el servidor (sin bloquear mucho) ──
-    try:
-        requests.get(url, timeout=5)
-    except Exception:
-        pass  # normal si está dormido — el ping lo despierta en background
-
-    # ── Paso 2: Un único timeout de 120s (2 minutos) para que se conecte ──
-    try:
-        timeout_segundos = 120  # 2 minutos
-        print(f"[Config] Esperando servidor (timeout={timeout_segundos}s / 2 min)...")
-        resp = requests.get(url, timeout=timeout_segundos)
-        if resp.status_code == 200:
-            data = resp.json()
-            ng = len(data.get("groq_keys", []))
-            gm = 1 if data.get("gemini_api_key") else 0
-            print(f"✅ [Config] Keys cargadas — Groq:{ng} Gemini:{gm}")
-            return data
-        print(f"⚠️ [Config] Servidor respondió {resp.status_code}")
-        return {}
-    except requests.exceptions.Timeout:
-        print(f"⚠️ [Config] Timeout (120s) — usando .env local")
-        return {}
-    except requests.exceptions.ConnectionError as e:
-        print(f"⚠️ [Config] Sin conexión: {e}")
-        return {}
-    except Exception as e:
-        print(f"⚠️ [Config] Error inesperado: {e}")
-        return {}
+    Las claves de IA deben ser solo las que el usuario guarda localmente en su perfil.
+    """
+    print("[Config] Servidor remoto desactivado: usando solo claves locales del usuario.")
+    return {}
 
 def _inicializar_keys() -> dict:
-    server_keys = _cargar_keys_desde_servidor()
-    local_env   = _leer_env()
+    """Solo se usan las claves guardadas por el usuario en la app local.
 
-    def _get(sk, ek, default=""):
-        return server_keys.get(sk) or local_env.get(ek, default)
-
-    groq_keys = server_keys.get("groq_keys", [])
-    if not groq_keys:
-        k = local_env.get("GROQ_API_KEY", "").strip()
-        if k: groq_keys.append(k)
-        for i in range(2, 10):
-            k = local_env.get(f"GROQ_API_KEY_{i}", "").strip()
-            if k: groq_keys.append(k)
-
+    Se ignoran de forma intencional los valores provenientes de servidor/Render,
+    .env compartidos o variables globales del repo. La fuente única de verdad es
+    el gestor de proveedores de usuario almacenado en AppData/Jarvis.
+    """
+    groq_keys = []
     gemini_keys = []
-    for srv_key, env_key in [("gemini_api_key", "GEMINI_API_KEY"),
-                              ("gemini_api_key_2", "GEMINI_API_KEY_2")]:
-        v = server_keys.get(srv_key) or local_env.get(env_key, "").strip()
-        if v and v not in gemini_keys:
-            gemini_keys.append(v)
-
     nvidia_keys = []
-    server_nvidia_keys = server_keys.get("nvidia_keys", [])
-    if isinstance(server_nvidia_keys, str):
-        server_nvidia_keys = [server_nvidia_keys]
-    for v in server_nvidia_keys:
-        if v and v not in nvidia_keys:
-            nvidia_keys.append(v)
-    for server_key in ("nvidia_api_key", "nvidia_api_key_2", "nvidia_api_key_3"):
-        v = server_keys.get(server_key, "")
-        if v and v not in nvidia_keys:
-            nvidia_keys.append(v)
-    for server_key in (
-        "DEEPSEEK_V4_FLASH_0731_API_KEY",
-        "NVIDIA_NEMOTRON_3.5_LIGTHNIN30B_A3B_API_KEY_2",
-        "GPT_OSS_20B_API_KEY_3",
-        "GTP_OSS_20B_API_KEY_3",
-        "MISTRALAI_API_KEY",
-        "MISTRAL_NEMOTRON_API_KEY",
-    ):
-        v = server_keys.get(server_key, "")
-        if v and v not in nvidia_keys:
-            nvidia_keys.append(v)
-    # Acepta tanto el formato genérico NVIDIA_API_KEY como los nombres
-    # específicos que se muestran en el archivo API_KEYS.ENV del usuario.
-    nombres_nvidia = [
-        "DEEPSEEK_V4_FLASH_0731_API_KEY",
-        "NVIDIA_NEMOTRON_3.5_LIGTHNIN30B_A3B_API_KEY_2",
-        "GPT_OSS_20B_API_KEY_3",
-        "GTP_OSS_20B_API_KEY_3",
-        "GLM_5_3_FLASH_API_KEY",
-        "MISTRALAI_API_KEY",
-        "MISTRAL_NEMOTRON_API_KEY",
-    ]
-    for nombre in nombres_nvidia:
-        v = local_env.get(nombre, "").strip()
-        if v and v not in nvidia_keys:
-            nvidia_keys.append(v)
-    for i in range(1, 10):
-        env_key = "NVIDIA_API_KEY" if i == 1 else f"NVIDIA_API_KEY_{i}"
-        v = local_env.get(env_key, "").strip()
-        if v and v not in nvidia_keys:
-            nvidia_keys.append(v)
+
+    try:
+        providers = PROVIDER_MANAGER.config.get("providers", {})
+        for provider_name, provider in providers.items():
+            api_key = str(provider.get("api_key") or "").strip()
+            if not api_key:
+                continue
+            if provider_name == "groq":
+                if api_key not in groq_keys:
+                    groq_keys.append(api_key)
+            elif provider_name == "gemini":
+                if api_key not in gemini_keys:
+                    gemini_keys.append(api_key)
+            elif provider_name in {"openai", "anthropic", "mistral", "deepseek"}:
+                if api_key not in nvidia_keys:
+                    nvidia_keys.append(api_key)
+    except Exception as exc:
+        print(f"[Config] No pude leer claves locales del usuario: {exc}")
 
     return {
         "groq_keys":             groq_keys,
         "gemini_keys":           gemini_keys,
         "nvidia_keys":           nvidia_keys,
-        "anthropic_api_key":     _get("anthropic_api_key", "ANTHROPIC_API_KEY"),
-        "news_api_key":          _get("news_api_key", "NEWS_API_KEY"),
-        "unsplash_access_key":   _get("unsplash_access_key", "UNSPLASH_ACCESS_KEY"),
-        "pexels_api_key":        _get("pexels_api_key", "PEXELS_API_KEY"),
-        "google_search_api_key": _get("google_search_api_key", "GOOGLE_SEARCH_API_KEY"),
-        "google_search_cx":      _get("google_search_cx", "GOOGLE_SEARCH_CX"),
-        "elevenlabs_api_key":    _get("elevenlabs_api_key", "ELEVENLABS_API_KEY"),
+        "anthropic_api_key":     "",
+        "news_api_key":          "",
+        "unsplash_access_key":   "",
+        "pexels_api_key":        "",
+        "google_search_api_key": "",
+        "google_search_cx":      "",
+        "elevenlabs_api_key":    "",
     }
 
 # ── Variables globales de keys ────────────────────────────────────────────────
@@ -1362,6 +1303,79 @@ def _guardar_tokens():
 def _cargar_groq_keys() -> list:
     return list(_groq_keys) if _groq_keys else []
 
+
+def _sincronizar_keys_desde_provider_manager():
+    """Fusiona todas las claves del usuario en la capa legacy sin perder rotación ni fallbacks.
+
+    Antes se estaba leyendo solo la primera key guardada de cada proveedor, por eso solo aparecía
+    una clave en Groq aunque el usuario hubiera añadido varias. Ahora se sincronizan todas las keys.
+    """
+    global _groq_keys, _gemini_keys, _nvidia_keys, GROQ_API_KEY, GEMINI_API_KEY, NVIDIA_API_KEY
+
+    try:
+        _groq_keys = []
+        _gemini_keys = []
+        _nvidia_keys = []
+
+        for provider_name in PROVIDER_MANAGER.list_providers():
+            provider = PROVIDER_MANAGER.get_provider(provider_name)
+            api_keys = PROVIDER_MANAGER.provider_api_keys(provider_name)
+            if not api_keys:
+                continue
+
+            if provider_name == "groq":
+                for key in api_keys:
+                    if key and key not in _groq_keys:
+                        _groq_keys.append(key)
+            elif provider_name == "gemini":
+                for key in api_keys:
+                    if key and key not in _gemini_keys:
+                        _gemini_keys.append(key)
+            elif provider_name == "nvidia":
+                for key in api_keys:
+                    if key and key not in _nvidia_keys:
+                        _nvidia_keys.append(key)
+
+        GROQ_API_KEY = _groq_key_activa() if _groq_keys else ""
+        GEMINI_API_KEY = _gemini_key_activa() if _gemini_keys else ""
+        NVIDIA_API_KEY = _nvidia_key_activa() if _nvidia_keys else ""
+    except Exception as exc:
+        print(f"[ProviderManager] No se pudieron sincronizar las keys: {exc}")
+
+
+def _llamar_proveedor_manager(mensaje: str) -> list:
+    """Usa el gestor modular de proveedores cuando las claves legacy no están disponibles."""
+    try:
+        preferred = PROVIDER_MANAGER.config.get("selected_provider", "groq")
+        system = _construir_prompt(
+            historial=_formatear_historial(mensaje),
+            contexto=_contexto_actual(mensaje),
+        )
+        respuesta = PROVIDER_MANAGER.generate(
+            prompt=mensaje,
+            preferred=preferred,
+            system_prompt=system,
+            timeout=30,
+        )
+        provider_name = getattr(PROVIDER_MANAGER, "last_provider_name", preferred) or preferred
+        model_name = getattr(PROVIDER_MANAGER, "last_model_name", None) or "desconocido"
+        print(f"[IA] Proveedor realmente usado: {provider_name} | modelo={model_name}")
+        raw_limpio = _limpiar_json(respuesta)
+        try:
+            parsed = json.loads(raw_limpio)
+        except json.JSONDecodeError:
+            return [{"accion": "responder", "params": {"texto": f"<p>{respuesta[:400]}</p>"}}]
+
+        if isinstance(parsed, list):
+            return parsed
+        if isinstance(parsed, dict) and "accion" in parsed:
+            return [parsed]
+        return [{"accion": "responder", "params": {"texto": f"<p>{respuesta[:400]}</p>"}}]
+    except Exception as exc:
+        print(f"[ProviderManager] Error al invocar proveedor: {exc}")
+        return []
+
+
 def _cargar_keys_background():
     global _KEYS, _groq_keys, _gemini_keys, _nvidia_keys
     global GROQ_API_KEY, GEMINI_API_KEY, NVIDIA_API_KEY, NEWS_API_KEY, ANTHROPIC_API_KEY
@@ -1371,9 +1385,10 @@ def _cargar_keys_background():
     _groq_keys        = _KEYS.get("groq_keys", [])
     _gemini_keys      = _KEYS.get("gemini_keys", [])
     _nvidia_keys      = _KEYS.get("nvidia_keys", [])
-    GROQ_API_KEY      = _groq_key_activa()
-    GEMINI_API_KEY    = _gemini_keys[0] if _gemini_keys else ""
-    NVIDIA_API_KEY    = _nvidia_key_activa()
+    _sincronizar_keys_desde_provider_manager()
+    GROQ_API_KEY      = _groq_key_activa() if _groq_keys else ""
+    GEMINI_API_KEY    = _gemini_key_activa() if _gemini_keys else ""
+    NVIDIA_API_KEY    = _nvidia_key_activa() if _nvidia_keys else ""
     NEWS_API_KEY      = _KEYS.get("news_api_key", "")
     ANTHROPIC_API_KEY = _KEYS.get("anthropic_api_key", "")
     GOOGLE_SEARCH_API_KEY = _KEYS.get("google_search_api_key", "")
@@ -2739,7 +2754,7 @@ _HERRAMIENTAS = """
 
 # AGENTE GOOGLE (agent_google)
 - gmail_leer       {max_msgs?}       → leer bandeja de entrada
-- gmail_buscar     {consulta}        → buscar correos
+- gmail_buscar     {consulta}        → buscar correos por texto o remitente; reconoce nombres guardados en Contactos de confianza
 - gmail_enviar     {destinatario, asunto, cuerpo} → enviar email
 - gmail_eliminar   {consulta}        → eliminar correos
 - ver_eventos                        → ver eventos de Google Calendar
@@ -2868,6 +2883,7 @@ _PROMPT_SISTEMA_TEMPLATE = (
     "   ▪ Para avisar a un contacto de confianza, usa enviar_aviso_contacto. Solo puede enviarse por correo mediante Gmail y siempre requiere confirmación explícita.\n"
     "   ▪ Si el contacto solo tiene teléfono o WhatsApp, informa que aún no hay envío automático disponible; nunca digas que el mensaje fue enviado.\n"
     "   ▪ Correo/calendar/tareas → agente google.\n"
+    "   ▪ Si pide correos de una persona, usa gmail_buscar con el remitente o el nombre que dijo; Jarvis resolverá nombres guardados en Contactos de confianza.\n"
     "   ▪ gmail_enviar SIEMPRE requiere confirmación posterior: prepara el correo, muestra destinatario/asunto y espera 'sí/envíalo'.\n"
     "   ▪ Nunca trates 'gmail_enviar' como confirmado solo porque el usuario lo pidió inicialmente.\n"
     "9. MAPAS INTELIGENTES: cuando usuario pide 'mostrar', 'mapa', 'dónde está'\n"
@@ -4376,10 +4392,16 @@ def _llamar_groq(mensaje: str) -> list:
         else:
             mensaje_final = mensaje
 
+    provider_config = PROVIDER_MANAGER.get_provider("groq")
+    modelo_seleccionado = str(provider_config.get("model") or "").strip()
+    modelos_configurados = PROVIDER_MANAGER.get_provider_models("groq")
     modelos = []
-    for modelo in [GROQ_MODEL] + [m for m in GROQ_MODELOS_FALLBACK if m != GROQ_MODEL]:
+    modelos_a_probar = ([modelo_seleccionado] if modelo_seleccionado else []) + modelos_configurados
+    for modelo in modelos_a_probar:
         if modelo and modelo not in modelos:
             modelos.append(modelo)
+    if not modelos:
+        modelos = [GROQ_MODEL] + [m for m in GROQ_MODELOS_FALLBACK if m != GROQ_MODEL]
 
     for modelo in modelos:
         payload = {
@@ -4462,6 +4484,8 @@ def _llamar_groq(mensaje: str) -> list:
             print(f"[Groq] Sin acciones válidas en: {r}")
             return [{"accion": "responder", "params": {"texto": f"<p>{raw[:400]}</p>"}}]
 
+        print(f"[IA] Proveedor realmente usado: groq")
+
         _ACCIONES_SISTEMA = {
             "abrir_app", "cerrar_app", "minimizar_app", "maximizar_app",
             "poner_volumen", "subir_volumen", "bajar_volumen", "mute",
@@ -4473,6 +4497,7 @@ def _llamar_groq(mensaje: str) -> list:
                 nombre_app = a.get("params", {}).get("nombre", "")
                 _agregar_historial("jarvis", f"[ejecutado: {ac}{' ' + nombre_app if nombre_app else ''}]")
 
+        print(f"[IA] Proveedor realmente usado: groq | modelo={modelo}")
         return r_valido
 
     print("[Groq] Ningún modelo disponible respondió correctamente.")
@@ -4562,6 +4587,7 @@ def _llamar_nvidia(mensaje: str, modelos=None) -> list:
                 if validas:
                     transcurrido = time.monotonic() - inicio_nvidia
                     print(f"[NVIDIA] Respuesta válida ({modelo}) en {transcurrido:.1f}s")
+                    print(f"[IA] Proveedor realmente usado: nvidia | modelo={modelo}")
                     return validas
             except (KeyError, ValueError, json.JSONDecodeError) as exc:
                 print(f"[NVIDIA] Respuesta no válida ({modelo}): {exc}")
@@ -4573,8 +4599,37 @@ def _llamar_nvidia(mensaje: str, modelos=None) -> list:
 
 def _establecer_modelo_preferido(modelo: str) -> str:
     global _modelo_preferido
-    permitidos = {"auto", "glm", "mistral", "gpt_oss", "groq", "gemini"}
-    _modelo_preferido = modelo if modelo in permitidos else "auto"
+    valor = (modelo or "").strip()
+    if ":" in valor:
+        provider_name, model_name = valor.split(":", 1)
+        provider_name = provider_name.strip().lower()
+        model_name = model_name.strip()
+        if provider_name in PROVIDER_MANAGER.config.get("providers", {}):
+            PROVIDER_MANAGER.set_selected_provider(provider_name)
+            PROVIDER_MANAGER.set_provider_model(provider_name, model_name)
+            _modelo_preferido = provider_name
+            print(f"[Modelo] Proveedor/modelo activo: {provider_name}:{model_name}")
+            return _modelo_preferido
+
+    # Permite indicar solo el ID del modelo si existe en un proveedor guardado.
+    valor_lower = valor.lower()
+    for provider_name in PROVIDER_MANAGER.list_providers():
+        modelos = PROVIDER_MANAGER.get_provider_models(provider_name)
+        encontrado = next((item for item in modelos if item.lower() == valor_lower), None)
+        if encontrado:
+            PROVIDER_MANAGER.set_selected_provider(provider_name)
+            PROVIDER_MANAGER.set_provider_model(provider_name, encontrado)
+            _modelo_preferido = provider_name
+            print(f"[Modelo] Proveedor/modelo activo: {provider_name}:{encontrado}")
+            return _modelo_preferido
+
+    permitidos = {"auto", "glm", "mistral", "groq", "gemini", "deepseek", "openai", "anthropic", "ollama"}
+    _modelo_preferido = valor if valor in permitidos else "auto"
+    if _modelo_preferido in PROVIDER_MANAGER.config.get("providers", {}):
+        provider = PROVIDER_MANAGER.get_provider(_modelo_preferido)
+        selected_model = provider.get("model") or PROVIDER_MANAGER.get_provider_models(_modelo_preferido)[0]
+        PROVIDER_MANAGER.set_selected_provider(_modelo_preferido)
+        PROVIDER_MANAGER.set_provider_model(_modelo_preferido, selected_model)
     print(f"[Modelo] Preferencia activa: {_modelo_preferido}")
     return _modelo_preferido
 
@@ -4625,6 +4680,7 @@ def _llamar_gemini_cerebro(mensaje: str) -> list:
                 for a in r_valido:
                     if "params" not in a:
                         a["params"] = {}
+                print(f"[IA] Proveedor realmente usado: gemini | modelo={modelo}")
                 return r_valido
         except _ue.HTTPError as e:
             try:
@@ -5276,7 +5332,7 @@ def _interpretar_multiple_impl(comando: str, chat_widget=None, mostrar_usuario: 
         and any(palabra in cmd_lower_routing for palabra in palabras_complejas)
     )
     modelo_preferido = _modelo_preferido
-    usar_nvidia = modelo_preferido in {"auto", "glm", "mistral", "gpt_oss"}
+    usar_nvidia = modelo_preferido in {"auto", "glm", "mistral"}
     usar_groq = modelo_preferido in {"auto", "groq"}
     usar_gemini = modelo_preferido in {"auto", "gemini"}
 
@@ -5284,16 +5340,18 @@ def _interpretar_multiple_impl(comando: str, chat_widget=None, mostrar_usuario: 
         modelos = [NVIDIA_MODELO_RAPIDO]
     elif modelo_preferido == "mistral":
         modelos = [NVIDIA_MODELO_MISTRAL]
-    elif modelo_preferido == "gpt_oss":
-        modelos = ["openai/gpt-oss-20b"]
-    elif es_tarea_compleja:
-        # Auto prioriza velocidad; los modelos lentos quedan disponibles
-        # mediante selección manual en la interfaz.
-        modelos = ["openai/gpt-oss-20b"]
     else:
-        modelos = ["openai/gpt-oss-20b", NVIDIA_MODELO_RAPIDO]
+        modelos = [NVIDIA_MODELO_RAPIDO, NVIDIA_MODELO_MISTRAL]
 
-    if _nvidia_keys and usar_nvidia:
+    proveedor_activo = PROVIDER_MANAGER.get_enabled_providers()
+    if proveedor_activo:
+        try:
+            acciones = _llamar_proveedor_manager(comando)
+        except Exception as e:
+            print(f"[ProviderManager priority] {e}")
+            acciones = []
+
+    if not acciones and _nvidia_keys and usar_nvidia:
         try:
             acciones = _llamar_nvidia(comando, modelos=modelos)
         except Exception as e:
@@ -5793,6 +5851,7 @@ def _inicializar_agentes():
         "limpiar_html":    _limpiar_html,
         "markdown_a_html": _markdown_a_html,
         "base_path":       data_path,
+        "data_path":       data_path,
         "resource_path":   base_path,
         "config":          config,
         "memoria_usuario": memoria_usuario,
@@ -5877,12 +5936,11 @@ def _inicializar_agentes():
     # ── agent_google ──────────────────────────────────────────────────────────
     agent_google.init({
         **ctx_base,
-        "obtener_credenciales": None,  # agent_google tiene su propio OAuth
         "quitar_tildes":        quitar_tildes,
         "formatear_fecha":      formatear_fecha,
-        "SERVIDOR_AUTH":        SERVIDOR_AUTH,
         "SCOPES":               SCOPES,
         "guardar_contacto_confianza": agent_notas.guardar_correo_contacto,
+        "obtener_contacto_confianza": agent_notas.contacto_confianza_obtener,
     })
     print("[Agentes] ✅ agent_google listo")
 
@@ -5899,23 +5957,49 @@ def _inicializar_agentes():
 
 ESTILO_DIALOG = """
 QDialog, QWidget {
-    background: #060d1a;
-    color: #ccd6f6;
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #071521, stop:0.42 #091a2d, stop:1 #050b15);
+    color: #e8f2ff;
     font-family: 'Segoe UI', sans-serif;
     font-size: 14px;
 }
-QLabel#titulo { color: #4db8ff; font-size: 18px; font-weight: bold; }
-QLabel#sub    { color: #8899bb; font-size: 13px; }
-QPushButton   { background: rgba(14,48,120,0.80); color: #4db8ff;
-                border: 1px solid #1a5fa8; border-radius: 10px;
-                padding: 10px 20px; font-size: 14px; }
-QPushButton:hover   { background: #1a3fc0; color: white; }
-QPushButton#guardar { background: #0d4a90; }
-QPushButton#cerrar  { background: rgba(80,20,20,0.7); color: #e07070; }
-QLineEdit     { background: rgba(10,20,40,0.85); color: #dde6f5;
-                border: 1.5px solid rgba(77,184,255,0.4);
-                border-radius: 8px; padding: 8px 12px; }
+QScrollArea { background: transparent; border: none; }
+QLabel#titulo { color: #79d8ff; font-size: 20px; font-weight: 700; letter-spacing: 0.2px; }
+QLabel#sub    { color: #8ea7c4; font-size: 12px; }
+QPushButton   {
+    background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+        stop:0 #123b66, stop:1 #0c2746);
+    color: #dfeeff;
+    border: 1px solid rgba(116, 190, 255, 0.35);
+    border-radius: 12px; padding: 10px 18px; font-size: 13px; font-weight: 600;
+}
+QPushButton:hover   { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #1a4d80, stop:1 #0b2e54); color: white; }
+QPushButton#guardar { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 #0d5fb0, stop:1 #0a3d75); }
+QPushButton#cerrar  { background: rgba(120, 28, 28, 0.55); color: #ef8d8d; border-color: rgba(255, 128, 128, 0.2); }
+QComboBox, QLineEdit, QTextEdit {
+    background: rgba(10, 18, 32, 0.9);
+    color: #eaf4ff;
+    border: 1px solid rgba(122, 171, 255, 0.2);
+    border-radius: 10px;
+    padding: 8px 12px;
+}
+QComboBox:focus, QLineEdit:focus, QTextEdit:focus {
+    border: 1px solid rgba(118, 211, 255, 0.72);
+}
+QCheckBox { color: #dfeeff; spacing: 10px; }
+QCheckBox::indicator {
+    width: 16px; height: 16px; border-radius: 5px;
+    border: 1px solid rgba(118, 211, 255, 0.38);
+    background: rgba(14, 25, 43, 0.9);
+}
+QCheckBox::indicator:checked {
+    background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 #79d8ff, stop:1 #3e7ef5);
+    border: 1px solid rgba(120, 216, 255, 0.8);
+}
 QFrame#linea  { color: rgba(77,184,255,0.3); }
+QTabWidget::pane { border: 1px solid rgba(122, 171, 255, 0.18); border-radius: 14px; }
+QTabBar::tab { background: rgba(10, 18, 31, 0.8); color: #93a7c6; border: 1px solid rgba(122,171,255,0.14); border-bottom: none; border-top-left-radius: 10px; border-top-right-radius: 10px; padding: 9px 14px; }
+QTabBar::tab:selected { background: rgba(20, 50, 80, 0.9); color: #dfeeff; border-color: rgba(118,211,255,0.38); }
 """
 
 
@@ -6432,10 +6516,10 @@ class VentanaContactosConfianza(QWidget):
         layout.setContentsMargins(24, 20, 24, 20)
         layout.setSpacing(8)
 
-        titulo = QLabel("👥 Contactos de confianza")
+        titulo = QLabel("👥 Contactos y nombres reconocidos")
         titulo.setObjectName("titulo")
         layout.addWidget(titulo)
-        subtitulo = QLabel("Guarda familiares o cuidadores. Jarvis no enviará mensajes desde este apartado.")
+        subtitulo = QLabel("Guarda un nombre y su correo. Jarvis podrá buscar sus mensajes de Gmail cuando lo menciones por ese nombre.")
         subtitulo.setObjectName("sub")
         subtitulo.setWordWrap(True)
         layout.addWidget(subtitulo)
@@ -6542,6 +6626,61 @@ class VentanaConfig(QDialog):
         self._perfil_accesibilidad.setCurrentIndex(max(0, seleccionado))
         perfil_layout.addWidget(self._perfil_accesibilidad)
         layout.addLayout(perfil_layout)
+
+        ia_header = QWidget()
+        ia_header_layout = QHBoxLayout(ia_header)
+        ia_header_layout.setContentsMargins(0, 0, 0, 0)
+        ia_header_layout.setSpacing(10)
+        ia_badge = QLabel("��")
+        ia_badge.setStyleSheet("font-size:20px;")
+        ia_badge.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        ia_info = QLabel("Acceso de IA por usuario")
+        ia_info.setStyleSheet("color:#dfeaff;font-size:14px;font-weight:700;")
+        ia_header_layout.addWidget(ia_badge)
+        ia_header_layout.addWidget(ia_info)
+        ia_header_layout.addStretch()
+        layout.addWidget(ia_header)
+
+        ia_sub = QLabel("Cada persona puede usar sus propias claves. Se guardan localmente en tu equipo y no se suben al repositorio.")
+        ia_sub.setStyleSheet("color:#7e8ba4;font-size:11px;")
+        ia_sub.setWordWrap(True)
+        layout.addWidget(ia_sub)
+
+        provider_selector_wrap = QWidget()
+        provider_selector_wrap.setObjectName("providerSelector")
+        provider_selector_wrap.setStyleSheet(
+            "QWidget#providerSelector { background: rgba(8, 16, 28, 0.8); border: 1px solid rgba(120, 160, 255, 0.22); border-radius: 10px; }"
+        )
+        selector_layout = QHBoxLayout(provider_selector_wrap)
+        selector_layout.setContentsMargins(12, 10, 12, 10)
+        self._provider_selector = QComboBox()
+        for provider_name in PROVIDER_MANAGER.list_providers():
+            self._provider_selector.addItem(provider_name.upper(), provider_name)
+        selected_provider = PROVIDER_MANAGER.config.get("selected_provider", "groq")
+        idx = self._provider_selector.findData(selected_provider)
+        if idx >= 0:
+            self._provider_selector.setCurrentIndex(idx)
+        self._provider_selector.setVisible(False)
+
+        self._provider_model_selector = QComboBox()
+        self._provider_model_selector.setMinimumWidth(200)
+        selector_layout.addWidget(QLabel("Modelo en uso"))
+        selector_layout.addWidget(self._provider_model_selector, 1)
+        self._provider_selector.currentIndexChanged.connect(self._actualizar_selector_modelos)
+        self._actualizar_selector_modelos()
+
+        btn_add_provider = QPushButton("+ Añadir proveedor")
+        btn_add_provider.setStyleSheet("QPushButton { background: rgba(14, 75, 120, 0.75); border: 1px solid rgba(125, 180, 255, 0.42); border-radius: 8px; color: white; padding: 8px 10px; }")
+        btn_add_provider.clicked.connect(self._agregar_proveedor_manual)
+        selector_layout.addWidget(btn_add_provider)
+        layout.addWidget(provider_selector_wrap)
+
+        self._provider_fields = {}
+        self._provider_key_labels = {}
+        self._provider_key_containers = {}
+        provider_order = PROVIDER_MANAGER.list_providers()
+        for provider_name in provider_order:
+            layout.addWidget(self._crear_tarjeta_proveedor(provider_name))
 
         alias_titulo = QLabel("Frases personalizadas (separadas por comas)")
         alias_titulo.setStyleSheet("color:#8899bb;font-size:11px;margin-top:6px;")
@@ -6660,6 +6799,15 @@ class VentanaConfig(QDialog):
         self._chks.append(_chk("📷 Búsqueda automática de imágenes en respuestas", "imagenes_auto", True))
         self._chks.append(_chk("🔗 Abrir links en navegador por defecto", "abrir_links_navegador", True))
         self._chks.append(_chk("💬 Mostrar panel de chat Qt (F12)", "chat_qt_visible", False))
+        toolbar_layout = QHBoxLayout()
+        toolbar_layout.addWidget(QLabel("Ubicación de los botones de acceso"))
+        self._toolbar_position = QComboBox()
+        for etiqueta, valor in (("Abajo", "bottom"), ("Izquierda · vertical", "left"), ("Derecha · vertical", "right"), ("Arriba", "top")):
+            self._toolbar_position.addItem(etiqueta, valor)
+        toolbar_index = self._toolbar_position.findData(config.get("toolbar_position", "bottom"))
+        self._toolbar_position.setCurrentIndex(max(0, toolbar_index))
+        toolbar_layout.addWidget(self._toolbar_position, 1)
+        layout.addLayout(toolbar_layout)
 
         layout.addStretch()
         scroll.setWidget(contenedor)
@@ -6694,9 +6842,249 @@ class VentanaConfig(QDialog):
         btns.addWidget(btn_c); btns.addWidget(btn_g)
         root.addWidget(btns_widget)
 
+    def _crear_tarjeta_proveedor(self, provider_name: str):
+        provider = PROVIDER_MANAGER.get_provider(provider_name)
+        card = QFrame()
+        card.setObjectName("providerCard")
+        card.setStyleSheet(
+            "QFrame#providerCard { background: rgba(10, 18, 32, 0.86); border: 1px solid rgba(96, 138, 210, 0.25); border-radius: 12px; padding: 4px; }"
+        )
+        main_row = QVBoxLayout(card)
+        main_row.setContentsMargins(12, 10, 12, 10)
+        main_row.setSpacing(8)
+
+        row = QHBoxLayout()
+        row.setSpacing(10)
+        toggle = QCheckBox(provider_name.upper())
+        selected_provider = PROVIDER_MANAGER.config.get("selected_provider", "")
+        toggle.setChecked(
+            provider_name == selected_provider
+            and bool(PROVIDER_MANAGER.provider_api_keys(provider_name))
+        )
+        toggle.setStyleSheet("QCheckBox { color: #dfeaff; font-weight: 600; }")
+        toggle.stateChanged.connect(lambda state, p=provider_name: self._cambiar_proveedor_desde_tarjeta(p, state))
+
+        entrada = QLineEdit(str(provider.get("api_key", "") or ""))
+        entrada.setPlaceholderText(f"Pega la clave de {provider_name.upper()}")
+        entrada.setEchoMode(QLineEdit.EchoMode.Password)
+        entrada.setClearButtonEnabled(True)
+        entrada.setStyleSheet(
+            "QLineEdit { background: rgba(3, 9, 18, 0.9); border: 1px solid rgba(140, 175, 255, 0.18); border-radius: 8px; color: #eef4ff; padding: 8px 10px; }"
+            "QLineEdit:focus { border: 1px solid rgba(100, 180, 255, 0.75); }"
+        )
+        add_btn = QPushButton("+ Añadir clave")
+        add_btn.setStyleSheet("QPushButton { background: rgba(30, 80, 160, 0.8); border: 1px solid rgba(108, 156, 255, 0.4); border-radius: 8px; color: white; padding: 8px 12px; }")
+        add_btn.clicked.connect(lambda _, p=provider_name, e=entrada: self._agregar_key_proveedor(p, e))
+
+        row.addWidget(toggle)
+        row.addWidget(entrada, 1)
+        row.addWidget(add_btn)
+        main_row.addLayout(row)
+
+        base_url_label = QLabel("Base URL opcional. Puedes escribir el dominio, /v1 o el endpoint completo.")
+        base_url_label.setStyleSheet("color:#9eb4d3;font-size:10px;")
+        base_url_label.setWordWrap(True)
+        main_row.addWidget(base_url_label)
+        base_url_input = QLineEdit(str(provider.get("base_url", "") or ""))
+        base_url_input.setPlaceholderText("Ejemplo: api.groq.com/v1")
+        base_url_input.setClearButtonEnabled(True)
+        main_row.addWidget(base_url_input)
+
+        model_row = QHBoxLayout()
+        model_input = QLineEdit()
+        model_input.setPlaceholderText("ID del modelo (opcional; se puede detectar después)")
+        model_input.setClearButtonEnabled(True)
+        add_model_btn = QPushButton("+ Añadir modelo")
+        add_model_btn.setStyleSheet("QPushButton { background: rgba(30, 80, 160, 0.8); border: 1px solid rgba(108, 156, 255, 0.4); border-radius: 8px; color: white; padding: 8px 12px; }")
+        add_model_btn.clicked.connect(lambda _, p=provider_name, e=model_input: self._agregar_modelo_proveedor(p, e))
+        model_row.addWidget(model_input, 1)
+        model_row.addWidget(add_model_btn)
+        main_row.addLayout(model_row)
+
+        model_list = QWidget()
+        model_list_layout = QHBoxLayout(model_list)
+        model_list_layout.setContentsMargins(0, 0, 0, 0)
+        model_list_layout.setSpacing(5)
+        for model_name in PROVIDER_MANAGER.get_provider_models(provider_name):
+            model_btn = QPushButton(f"{model_name}  ×")
+            model_btn.setToolTip("Eliminar este modelo")
+            model_btn.setStyleSheet("QPushButton { background: rgba(18, 30, 52, 0.9); border: 1px solid rgba(97, 136, 255, 0.25); border-radius: 8px; color: #eaf3ff; padding: 4px 8px; font-size: 10px; }")
+            model_btn.clicked.connect(lambda _, p=provider_name, m=model_name: self._eliminar_modelo_proveedor(p, m))
+            model_list_layout.addWidget(model_btn)
+        model_list_layout.addStretch()
+        main_row.addWidget(model_list)
+
+        key_container = QWidget()
+        key_layout = QHBoxLayout(key_container)
+        key_layout.setContentsMargins(0, 0, 0, 0)
+        key_layout.setSpacing(6)
+
+        label = QLabel("Sin claves guardadas")
+        label.setStyleSheet("color:#7e8ba4;font-size:11px;")
+        label.setWordWrap(True)
+        key_layout.addWidget(label)
+
+        self._provider_key_labels[provider_name] = label
+        self._provider_key_containers[provider_name] = key_container
+        self._provider_fields[provider_name] = (toggle, entrada, add_btn, base_url_input, model_input)
+        main_row.addWidget(key_container)
+        remove_provider_btn = QPushButton("Eliminar proveedor")
+        remove_provider_btn.setToolTip("Elimina este proveedor y sus claves guardadas")
+        remove_provider_btn.setStyleSheet("QPushButton { background: rgba(120, 28, 28, 0.55); border: 1px solid rgba(255, 128, 128, 0.25); border-radius: 8px; color: #efaaaa; padding: 6px 10px; }")
+        remove_provider_btn.clicked.connect(lambda _, p=provider_name: self._eliminar_proveedor(p))
+        main_row.addWidget(remove_provider_btn)
+        self._refrescar_etiqueta_claves(provider_name)
+        return card
+
+    def _cambiar_proveedor_desde_tarjeta(self, provider_name: str, state: int):
+        if not state or not hasattr(self, "_provider_selector"):
+            if not state and provider_name in self._provider_fields:
+                toggle = self._provider_fields[provider_name][0]
+                toggle.blockSignals(True)
+                toggle.setChecked(True)
+                toggle.blockSignals(False)
+            return
+        index = self._provider_selector.findData(provider_name)
+        if index >= 0 and self._provider_selector.currentIndex() != index:
+            self._provider_selector.setCurrentIndex(index)
+        for other_name, fields in self._provider_fields.items():
+            if other_name != provider_name:
+                fields[0].blockSignals(True)
+                fields[0].setChecked(False)
+                fields[0].blockSignals(False)
+
+    def _agregar_proveedor_manual(self):
+        nombre, ok = QInputDialog.getText(self, "Añadir proveedor", "Nombre del proveedor (ej. render, openrouter, deepseek):")
+        if not ok or not str(nombre or "").strip():
+            return
+        nombre = str(nombre).strip().lower().replace(" ", "_")
+        base_url, ok_url = QInputDialog.getText(self, "Base URL", "Copia aquí el endpoint de chat que indica tu proveedor. Para Groq usa: https://api.groq.com/openai/v1/chat/completions")
+        if not ok_url:
+            return
+        tipo, ok_tipo = QInputDialog.getItem(self, "Tipo", "Tipo de integración", ["openai_compatible", "gemini", "anthropic", "ollama"], 0, False)
+        if not ok_tipo:
+            return
+        modelo, ok_modelo = QInputDialog.getText(self, "Modelo", "Escribe el ID exacto del modelo que muestra tu proveedor (ej. openai/gpt-oss-120b):", text="gpt-4o-mini")
+        if not ok_modelo:
+            return
+        PROVIDER_MANAGER.add_custom_provider(
+            nombre,
+            model=str(modelo).strip() or None,
+            base_url=str(base_url).strip() or None,
+            provider_type=str(tipo).strip(),
+            enabled=True,
+        )
+        self._provider_selector.addItem(nombre.upper(), nombre)
+        card = self._crear_tarjeta_proveedor(nombre)
+        self.layout().insertWidget(self.layout().count() - 1, card)
+        self._actualizar_selector_modelos()
+        self._refrescar_etiqueta_claves(nombre)
+
+    def _agregar_modelo_proveedor(self, provider_name: str, entrada: QLineEdit):
+        modelo = (entrada.text() or "").strip()
+        if not modelo:
+            return
+        provider = PROVIDER_MANAGER.get_provider(provider_name)
+        modelos = PROVIDER_MANAGER.get_provider_models(provider_name)
+        if modelo not in modelos:
+            modelos.append(modelo)
+        PROVIDER_MANAGER.set_provider_models(provider_name, modelos)
+        entrada.clear()
+        if (self._provider_selector.currentData() or "") == provider_name:
+            self._actualizar_selector_modelos()
+
+    def _eliminar_modelo_proveedor(self, provider_name: str, model_name: str):
+        respuesta = QMessageBox.question(self, "Eliminar modelo", f"¿Eliminar el modelo '{model_name}'?")
+        if respuesta != QMessageBox.StandardButton.Yes:
+            return
+        PROVIDER_MANAGER.remove_provider_model(provider_name, model_name)
+        if (self._provider_selector.currentData() or "") == provider_name:
+            self._actualizar_selector_modelos()
+        QMessageBox.information(self, "Modelo eliminado", "El modelo se eliminará visualmente al volver a abrir Configuración.")
+
+    def _eliminar_proveedor(self, provider_name: str):
+        if len(PROVIDER_MANAGER.list_providers()) <= 1:
+            QMessageBox.information(self, "Proveedor requerido", "Debe quedar al menos un proveedor configurado.")
+            return
+        respuesta = QMessageBox.question(
+            self,
+            "Eliminar proveedor",
+            f"¿Eliminar '{provider_name.upper()}' y todas sus claves y modelos?",
+        )
+        if respuesta != QMessageBox.StandardButton.Yes:
+            return
+        PROVIDER_MANAGER.remove_provider(provider_name)
+        QMessageBox.information(self, "Proveedor eliminado", "El proveedor fue eliminado. La ventana se cerrará para actualizar la lista.")
+        self.accept()
+
+    def _agregar_key_proveedor(self, provider_name: str, entrada: QLineEdit):
+        clave = (entrada.text() or "").strip()
+        if not clave:
+            return
+        PROVIDER_MANAGER.add_provider_key(provider_name, clave)
+        entrada.clear()
+        self._refrescar_etiqueta_claves(provider_name)
+        _sincronizar_keys_desde_provider_manager()
+
+    def _eliminar_key_proveedor(self, provider_name: str, api_key: str):
+        if not provider_name or not api_key:
+            return
+        PROVIDER_MANAGER.remove_provider_key(provider_name, api_key)
+        self._refrescar_etiqueta_claves(provider_name)
+        _sincronizar_keys_desde_provider_manager()
+
+    def _refrescar_etiqueta_claves(self, provider_name: str):
+        label = self._provider_key_labels.get(provider_name)
+        container = self._provider_key_containers.get(provider_name)
+        if not label or not container:
+            return
+
+        layout = container.layout()
+        if layout is not None:
+            for i in range(layout.count() - 1, -1, -1):
+                item = layout.itemAt(i)
+                widget = item.widget() if item else None
+                if widget and widget is not label:
+                    widget.deleteLater()
+                    layout.removeWidget(widget)
+
+        if label not in [layout.itemAt(i).widget() for i in range(layout.count())] if layout is not None else []:
+            layout.addWidget(label) if layout is not None else None
+
+        keys = PROVIDER_MANAGER.provider_api_keys(provider_name)
+        if not keys:
+            label.setText("Sin claves guardadas")
+            label.setStyleSheet("color:#7e8ba4;font-size:11px;")
+            return
+
+        label.setText("Claves guardadas")
+        label.setStyleSheet("color:#dfeaff;font-size:11px;")
+        for key in keys:
+            masked = f"{key[:4]}...{key[-4:]}" if len(key) > 8 else "****"
+            btn = QPushButton(masked)
+            btn.setStyleSheet("QPushButton { background: rgba(18, 30, 52, 0.9); border: 1px solid rgba(97, 136, 255, 0.25); border-radius: 8px; color: #eaf3ff; padding: 4px 8px; font-size: 10px; }")
+            btn.clicked.connect(lambda _, p=provider_name, k=key: self._eliminar_key_proveedor(p, k))
+            layout.addWidget(btn)
+
+    def _actualizar_selector_modelos(self):
+        provider_name = self._provider_selector.currentData() or "groq"
+        provider = PROVIDER_MANAGER.get_provider(provider_name)
+        modelos = PROVIDER_MANAGER.get_provider_models(provider_name)
+        self._provider_model_selector.blockSignals(True)
+        self._provider_model_selector.clear()
+        for modelo in modelos:
+            self._provider_model_selector.addItem(str(modelo), str(modelo))
+        seleccionado = provider.get("model") or ""
+        if seleccionado:
+            idx = self._provider_model_selector.findData(seleccionado)
+            if idx >= 0:
+                self._provider_model_selector.setCurrentIndex(idx)
+        self._provider_model_selector.blockSignals(False)
+
     def _guardar(self):
         for cb, key in self._chks:
             config[key] = cb.isChecked()
+        config["toolbar_position"] = self._toolbar_position.currentData() or "bottom"
         config["microfono_dispositivo"] = self._microfono_combo.currentData()
         aplicar_perfil_accesibilidad(self._perfil_accesibilidad.currentData())
         config["comandos_personalizados"] = {
@@ -6704,10 +7092,68 @@ class VentanaConfig(QDialog):
             for clave, campo in self._alias_fields.items()
         }
         guardar_config(config)
+
+        provider_name = self._provider_selector.currentData() or "groq"
+        provider_model = self._provider_model_selector.currentData() or self._provider_model_selector.currentText()
+        PROVIDER_MANAGER.set_selected_provider(provider_name)
+        PROVIDER_MANAGER.set_provider_model(provider_name, provider_model)
+        for nombre, (toggle, entrada, add_btn, base_url_input, model_input) in self._provider_fields.items():
+            clave_manual = (entrada.text() or "").strip()
+            keys = PROVIDER_MANAGER.provider_api_keys(nombre)
+            if clave_manual:
+                keys = list(keys)
+                if clave_manual not in keys:
+                    keys.append(clave_manual)
+            activo = bool(keys)
+            if keys:
+                PROVIDER_MANAGER.set_provider_keys(nombre, keys)
+            else:
+                PROVIDER_MANAGER.set_provider_key(nombre, "")
+            PROVIDER_MANAGER.set_provider_config(nombre, enabled=activo)
+            base_url = (base_url_input.text() or "").strip()
+            PROVIDER_MANAGER.set_provider_config(nombre, base_url=base_url)
+            modelo_manual = (model_input.text() or "").strip()
+            if modelo_manual:
+                modelos = PROVIDER_MANAGER.get_provider_models(nombre)
+                if modelo_manual not in modelos:
+                    modelos.append(modelo_manual)
+                PROVIDER_MANAGER.set_provider_models(nombre, modelos)
+            elif nombre == provider_name and not provider_model:
+                PROVIDER_MANAGER.set_provider_models(nombre, [])
+            if keys and not PROVIDER_MANAGER.get_provider_models(nombre):
+                PROVIDER_MANAGER.discover_provider_models(nombre)
+            if nombre == provider_name and provider_model:
+                PROVIDER_MANAGER.set_provider_model(nombre, provider_model)
+            self._refrescar_etiqueta_claves(nombre)
+
+        _sincronizar_keys_desde_provider_manager()
+        selected_models = [
+            {"value": f"{provider_name}:{model_name}", "label": str(model_name)}
+            for model_name in PROVIDER_MANAGER.get_provider_models(provider_name)
+        ]
+        selected_value = f"{provider_name}:{PROVIDER_MANAGER.get_provider(provider_name).get('model', '')}"
+        if _webview_ref is not None:
+            script = (
+                "(() => { const picker = document.getElementById('modelPicker'); if (!picker) return; "
+                f"const options = {json.dumps(selected_models, ensure_ascii=True)}; "
+                f"const selected = {json.dumps(selected_value, ensure_ascii=True)}; "
+                "picker.innerHTML=''; options.forEach(item => picker.add(new Option(item.label, item.value))); "
+                "picker.value=selected; if (picker.selectedIndex < 0 && options.length) picker.selectedIndex=0; })();"
+            )
+            _webview_ref.page().runJavaScript(script)
+            _webview_ref.page().runJavaScript(
+                f"if (typeof setToolbarPosition === 'function') setToolbarPosition({json.dumps(config['toolbar_position'])});"
+            )
         self.accept()
 
     def _restablecer(self):
         """Restablecer todos a valores por defecto."""
+        if hasattr(self, '_provider_fields'):
+            for _, (toggle, entrada, _add_btn, base_url_input, model_input) in self._provider_fields.items():
+                entrada.clear()
+                toggle.setChecked(False)
+                model_input.clear()
+
         _DEFAULTS = {
             "google_calendar": True, "google_tasks": True, "google_gmail": True,
             "avisos_calendar_activados": True,
@@ -6726,6 +7172,7 @@ class VentanaConfig(QDialog):
         }
         for cb, key in self._chks:
             cb.setChecked(_DEFAULTS.get(key, True))
+        self._toolbar_position.setCurrentIndex(self._toolbar_position.findData("bottom"))
 
 
 class VentanaComandos(QDialog):
@@ -6799,13 +7246,21 @@ def _estado_extension(clave: str) -> tuple[bool, str]:
 
 
 def _logo_extension(clave: str, tamaño: int = 48) -> QPixmap:
-    """Crea un icono de respaldo inmediato mientras llega el logo real."""
+    """Crea un icono de respaldo más premium mientras llega el logo real."""
     pixmap = QPixmap(tamaño, tamaño)
-    pixmap.fill(QColor("#24282e"))
+    pixmap.fill(Qt.GlobalColor.transparent)
     painter = QPainter(pixmap)
     painter.setRenderHint(QPainter.RenderHint.Antialiasing)
-    painter.setPen(QColor("#8fb8e0"))
-    painter.setFont(QFont("Segoe UI", 13, QFont.Weight.Bold))
+
+    gradient = QLinearGradient(0, 0, tamaño, tamaño)
+    gradient.setColorAt(0, QColor("#123d68"))
+    gradient.setColorAt(1, QColor("#0a1626"))
+    painter.setBrush(gradient)
+    painter.setPen(QColor("#77c9ff"))
+    painter.drawRoundedRect(2, 2, tamaño - 4, tamaño - 4, 14, 14)
+
+    painter.setPen(QColor("#dff5ff"))
+    painter.setFont(QFont("Segoe UI", 12, QFont.Weight.Bold))
     iniciales = {"google_gmail": "G", "google_calendar": "31", "google_tasks": "T", "google_drive": "D", "google_contacts": "C", "google_maps": "M", "busqueda_web": "G", "imagenes_auto": "I", "permiso_pantalla": "S"}
     painter.drawText(pixmap.rect(), Qt.AlignmentFlag.AlignCenter, iniciales.get(clave, "J"))
     painter.end()
@@ -6875,6 +7330,7 @@ class VentanaExtensiones(QDialog):
             ("Pantalla", "Observar o controlar el escritorio", "permiso_pantalla"),
         ]
         self._chks = []
+        self._google_toggles = {}
         self._estados = {}
         _bridge.extension_auth_result.connect(self._resultado_autorizacion)
         grid = QGridLayout()
@@ -6883,13 +7339,13 @@ class VentanaExtensiones(QDialog):
             tarjeta = QFrame()
             tarjeta.setObjectName("extensionCard")
             tarjeta.setStyleSheet(
-                "QFrame#extensionCard { background: #17191d; border: 1px solid #30343a; border-radius: 10px; }"
-                "QLabel#extensionIcon { background: #24282e; border: 1px solid #3d434c; border-radius: 8px; font-size: 24px; }"
-                "QLabel#extensionName { color: #f1f3f5; font-size: 14px; font-weight: 600; }"
-                "QLabel#extensionDetail { color: #9da5ae; font-size: 11px; }"
-                "QLabel#extensionState { background: transparent; border: none; }"
-                "QPushButton { background: #2a2e33; color: #d9dde2; border: none; border-radius: 6px; padding: 7px 12px; font-size: 11px; }"
-                "QPushButton:hover { background: #3b424a; }"
+                "QFrame#extensionCard { background: qlineargradient(x1:0, y1:0, x2:0, y2:1, stop:0 rgba(17, 28, 41, 0.96), stop:1 rgba(9, 15, 26, 0.96)); border: 1px solid rgba(122, 171, 255, 0.16); border-radius: 16px; }"
+                "QLabel#extensionIcon { background: qlineargradient(x1:0, y1:0, x2:1, y2:1, stop:0 rgba(22, 52, 82, 1), stop:1 rgba(9, 18, 29, 1)); border: 1px solid rgba(126, 196, 255, 0.3); border-radius: 14px; font-size: 24px; padding: 0; }"
+                "QLabel#extensionName { color: #edf5ff; font-size: 14px; font-weight: 700; }"
+                "QLabel#extensionDetail { color: #9aaec5; font-size: 11px; }"
+                "QLabel#extensionState { background: transparent; border: none; padding: 4px 8px; border-radius: 8px; }"
+                "QPushButton { background: rgba(20, 35, 53, 0.9); color: #d9dde2; border: 1px solid rgba(122,171,255,0.14); border-radius: 10px; padding: 7px 12px; font-size: 11px; }"
+                "QPushButton:hover { background: rgba(33, 52, 75, 1); }"
             )
             card_layout = QHBoxLayout(tarjeta)
             card_layout.setContentsMargins(12, 12, 12, 12); card_layout.setSpacing(10)
@@ -6907,6 +7363,8 @@ class VentanaExtensiones(QDialog):
             estado.setStyleSheet("color:#69d27a;font-size:11px;font-weight:600;" if conectado else "color:#8b929a;font-size:11px;font-weight:600;")
             interruptor = Interruptor(); interruptor.setProperty("clave", clave); interruptor.setChecked(bool(config.get(clave, False)))
             interruptor.toggled.connect(lambda activo, boton=interruptor, etiqueta=estado: self._alternar_extension(boton, etiqueta))
+            if clave in {"google_calendar", "google_tasks", "google_gmail", "google_drive", "google_contacts"}:
+                self._google_toggles[clave] = interruptor
             card_layout.addWidget(icon); card_layout.addLayout(info, 1); card_layout.addWidget(estado); card_layout.addWidget(interruptor)
             grid.addWidget(tarjeta, indice // 2, indice % 2)
             self._chks.append((estado, clave))
@@ -6914,11 +7372,50 @@ class VentanaExtensiones(QDialog):
         layout.addLayout(grid)
         nota = QLabel("Las conexiones de Google requieren autorización OAuth la primera vez que se usan.")
         nota.setStyleSheet("color:#6f7882;font-size:11px;padding-top:6px;"); nota.setWordWrap(True); layout.addWidget(nota)
+        cambiar_cuenta = QPushButton("Cerrar sesión de Google / cambiar cuenta")
+        cambiar_cuenta.clicked.connect(self._cerrar_sesion_google)
+        layout.addWidget(cambiar_cuenta)
         layout.addStretch()
         botones = QHBoxLayout()
         cerrar = QPushButton("Cancelar"); cerrar.setObjectName("cerrar"); cerrar.clicked.connect(self.reject)
         guardar = QPushButton("Guardar conexiones"); guardar.setObjectName("guardar"); guardar.clicked.connect(self._guardar)
         botones.addWidget(cerrar); botones.addWidget(guardar); layout.addLayout(botones)
+
+    def _cerrar_sesion_google(self):
+        respuesta = QMessageBox.question(
+            self,
+            "Cerrar sesión de Google",
+            "Se eliminará el token local de Google. Al volver a conectar una extensión podrás autorizar otra cuenta. ¿Continuar?",
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
+            QMessageBox.StandardButton.No,
+        )
+        if respuesta != QMessageBox.StandardButton.Yes:
+            return
+        token_file = os.path.join(data_path, "token.json")
+        try:
+            if os.path.exists(token_file):
+                os.remove(token_file)
+        except OSError as exc:
+            QMessageBox.warning(self, "No se pudo cerrar sesión", f"No pude eliminar el token local: {exc}")
+            return
+        for atributo in ("_svc_gmail", "_svc_calendar", "_svc_tasks", "_svc_people", "_svc_drive"):
+            setattr(agent_google, atributo, None)
+        agent_google._ctx["forzar_selector_cuenta_google"] = True
+        for clave, interruptor in self._google_toggles.items():
+            config[clave] = False
+            interruptor.blockSignals(True)
+            interruptor.setChecked(False)
+            interruptor.blockSignals(False)
+            estado = self._estados.get(clave)
+            if estado:
+                estado.setText("Desconectada")
+                estado.setStyleSheet("color:#8b929a;font-size:11px;font-weight:600;")
+        guardar_config(config)
+        QMessageBox.information(
+            self,
+            "Sesión cerrada",
+            "Se eliminó la sesión local de Google. Activa una extensión de Google y autoriza la cuenta que quieras usar.",
+        )
 
     def _alternar_extension(self, boton, etiqueta):
         clave = boton.property("clave")
@@ -7072,6 +7569,42 @@ class JarvisUI(QWidget):
             print(f"[UI] V5.html loadFinished: {ok}")
             if ok:
                 _v5_ready = True
+                selected_provider = PROVIDER_MANAGER.config.get("selected_provider", "groq")
+                opciones_modelos = [
+                    {"value": f"{selected_provider}:{model_name}", "label": str(model_name)}
+                    for model_name in PROVIDER_MANAGER.get_provider_models(selected_provider)
+                ]
+                opciones_json = json.dumps(opciones_modelos, ensure_ascii=True)
+                seleccionado_json = json.dumps(
+                    f"{selected_provider}:"
+                    f"{PROVIDER_MANAGER.get_provider(selected_provider).get('model', '')}",
+                    ensure_ascii=True,
+                )
+
+                def _actualizar_modelos_v5():
+                    script = f"""
+                        (() => {{
+                            const picker = document.getElementById('modelPicker');
+                            if (!picker) return;
+                            const options = {opciones_json};
+                            const selected = {seleccionado_json};
+                            picker.innerHTML = '';
+                            options.forEach(item => picker.add(new Option(item.label, item.value)));
+                            picker.value = selected;
+                            if (picker.selectedIndex < 0 && options.length) picker.selectedIndex = 0;
+                            if (picker.value) picker.title = `Modelo activo: ${{picker.value.split(':').slice(1).join(':')}}`;
+                        }})();
+                    """
+                    self._webview.page().runJavaScript(script)
+
+                QTimer.singleShot(100, _actualizar_modelos_v5)
+                toolbar_position = json.dumps(config.get("toolbar_position", "bottom"))
+                QTimer.singleShot(
+                    120,
+                    lambda: self._webview.page().runJavaScript(
+                        f"if (typeof setToolbarPosition === 'function') setToolbarPosition({toolbar_position});"
+                    ),
+                )
                 QTimer.singleShot(250, _vaciar_pendientes_v5)
             else:
                 print(f"[UI] V5.html loadFinished false, keeping _v5_ready={_v5_ready}")
@@ -7524,3 +8057,4 @@ if __name__ == "__main__":
     threading.Thread(target=_saludo, daemon=True).start()
 
     sys.exit(app.exec())
+

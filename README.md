@@ -253,11 +253,11 @@ https://www.googleapis.com/auth/drive
 https://www.googleapis.com/auth/contacts
 ```
 
-El código incluido delega el intercambio del código OAuth a un servidor propio del autor (`SERVIDOR_AUTH`) que actúa como *relay*. **Para tu propio despliegue necesitas:**
+El OAuth de Google se ejecuta localmente con `InstalledAppFlow`. **Para tu propio despliegue necesitas:**
 
 1. Crear un proyecto en [Google Cloud Console](https://console.cloud.google.com/) y habilitar las APIs de Calendar, Tasks, Gmail, Drive y People.
-2. Generar credenciales OAuth (tipo aplicación de escritorio o web, según tu flujo).
-3. Adaptar `agent_google._flujo_oauth_propio()` para usar tus propias credenciales, o implementar tu propio servidor de intercambio de tokens.
+2. Generar credenciales OAuth de tipo aplicación de escritorio.
+3. Coloca tu `credentials.json` de tipo **Desktop app** en la raíz del proyecto. La primera acción de Google abrirá el navegador con el flujo OAuth local y guardará el token en la carpeta de datos de Jarvis.
 
 El token resultante se guarda localmente en `token.json` dentro de la carpeta de datos de usuario y **nunca debe subirse al repositorio**.
 
@@ -362,7 +362,7 @@ Es un comportamiento conocido de ejecutables generados con PyInstaller sin firma
 
 - **No subas datos sensibles al repositorio**: `.env`, `token.json`, `jarvis_config.json`, archivos de memoria (`jarvis_memoria.json`, `jarvis_historial.json`, `memoria_chat.json`), la base de datos `jarvis_notas.db`, ni cachés de escaneo de apps. Usa un `.gitignore` que los excluya.
 - **Revoca cualquier token de Google que se haya expuesto accidentalmente** (por ejemplo, durante pruebas) antes de publicar el proyecto o compartir tu carpeta de datos.
-- El código incluye, embebida, la URL de un **servidor propio del autor original** (`jarvis-server-j5ze.onrender.com`) usado para distribuir claves API y para el intercambio OAuth de Google. Si ejecutas este proyecto tal cual, tu aplicación intentará contactar ese servidor de terceros al iniciar. Si te importa la privacidad o quieres un despliegue totalmente propio, **reemplaza ese endpoint** por tu propia infraestructura o depende exclusivamente de tu archivo `.env` local.
+- El OAuth de Google se ejecuta localmente con `InstalledAppFlow`; no se usa ningún relay remoto para intercambiar tokens. Las claves de IA se gestionan por separado mediante el gestor local de proveedores.
 - La captura de pantalla para análisis con IA es **efímera**: el código indica explícitamente que el frame capturado nunca se escribe en disco, pero sí se envía en base64 a la API de Groq o Gemini para su análisis (es decir, sale de tu equipo hacia un proveedor externo de IA).
 - El control por gestos usa la cámara web; el video no se graba, pero se procesa en tiempo real para detectar manos.
 - El asistente aprende y guarda pasivamente datos personales que menciones en conversación (nombre, ciudad, trabajo, preferencias) en `jarvis_memoria.json`. Puedes desactivarlo desde **Configuración → Privacidad de datos**.

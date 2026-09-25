@@ -39,27 +39,21 @@
 #
 # Dependencias inyectadas via init(ctx):
 #   hablar, cola_voz, bridge, html_burbuja,
-#   obtener_credenciales, base_path, config,
+#   base_path, config,
 #   quitar_tildes, formatear_fecha,
-#   SERVIDOR_AUTH, SCOPES
+#   resource_path, data_path, SCOPES
 # =============================================================================
 
 from __future__ import annotations
 
 import base64
-import json
 import os
 import re
 import threading
 import time
-import webbrowser
 from datetime import datetime, timedelta, timezone
 from email.mime.text import MIMEText
-from http.server import HTTPServer, BaseHTTPRequestHandler
 from html import escape
-from urllib.parse import urlparse, parse_qs
-
-import requests
 
 # =============================================================================
 # CONTEXTO INYECTADO
@@ -80,12 +74,10 @@ def init(ctx: dict):
             "cola_voz":             _cola_voz,
             "bridge":               _bridge,
             "html_burbuja":         _html_burbuja,
-            "obtener_credenciales": _obtener_credenciales,
             "base_path":            base_path,
             "config":               config,
             "quitar_tildes":        quitar_tildes,
             "formatear_fecha":      formatear_fecha,
-            "SERVIDOR_AUTH":        SERVIDOR_AUTH,
             "SCOPES":               SCOPES,
         })
     """
@@ -135,8 +127,6 @@ def _formatear_fecha(fecha_str):
 # AUTENTICACIÓN GOOGLE (OAuth reutilizando el flujo del monolito)
 # =============================================================================
 
-_token_recibido   = None
-_servidor_activo  = False
 _oauth_lock       = threading.Lock()
 
 # Servicios lazy — se crean al primer uso
@@ -154,31 +144,42 @@ _avisos_calendar_lock = threading.Lock()
 
 
 def _obtener_credenciales():
-    """Delega al monolito si está disponible; si no, ejecuta el flujo propio."""
-    fn = _ctx.get("obtener_credenciales")
-    if fn:
-        return fn()
-    return _flujo_oauth_propio()
-
-
-def _guardar_token_json(token_file: str, token_data: dict):
-    if not isinstance(token_data, dict):
-        raise ValueError("Token OAuth inválido")
-    os.makedirs(os.path.dirname(token_file) or ".", exist_ok=True)
-    with open(token_file, "w", encoding="utf-8") as f:
-        json.dump(token_data, f, indent=2, ensure_ascii=False)
-
-
-def _flujo_oauth_propio():
-    """Flujo OAuth completo si agent_google se usa de forma independiente."""
-    global _token_recibido, _servidor_activo
-
+    """Obtiene credenciales mediante OAuth local para una aplicación instalada."""
+    from google.auth.transport.requests import Request
     from google.oauth2.credentials import Credentials
-    from google.auth.transport.requests import Request as _GReq
+    from google_auth_oauthlib.flow import InstalledAppFlow
+    import json
 
-    base_path    = _ctx.get("base_path", os.getcwd())
-    token_file   = os.path.join(base_path, "token.json")
-    servidor_auth = _ctx.get("SERVIDOR_AUTH", "https://jarvis-server-j5ze.onrender.com")
+    resource_path = _ctx.get("resource_path", _ctx.get("base_path", os.getcwd()))
+    data_path = _ctx.get("data_path", _ctx.get("base_path", os.getcwd()))
+    credentials_file = os.path.join(resource_path, "credentials.json")
+    token_file = os.path.join(data_path, "token.json")
+    scopes = _ctx.get("SCOPES", [])
+
+    # Cliente OAuth instalado de Jarvis. PKCE evita incluir un client_secret
+    # en el ejecutable o en el código fuente distribuido.
+    client_config = {
+        "installed": {
+            "client_id": "439431963798-ofi64ihprtmf7q14a97gi8jkpvi0rn5c.apps.googleusercontent.com",
+            "auth_uri": "https://accounts.google.com/o/oauth2/auth",
+            "token_uri": "https://oauth2.googleapis.com/token",
+            "auth_provider_x509_cert_url": "https://www.googleapis.com/oauth2/v1/certs",
+        }
+    }
+
+    def _cargar_client_secret():
+        # La librería lo necesita para intercambiar o renovar el token; se lee
+        # solo cuando OAuth lo requiere y nunca se guarda en token.json.
+        with open(credentials_file, "r", encoding="utf-8") as archivo:
+            credenciales_app = json.load(archivo)
+        credenciales_instaladas = credenciales_app.get("installed", {})
+        if credenciales_instaladas.get("client_id") != client_config["installed"]["client_id"]:
+            raise ValueError("El client_id de credentials.json no coincide con Jarvis.")
+        client_secret = str(credenciales_instaladas.get("client_secret") or "").strip()
+        if not client_secret:
+            raise ValueError("credentials.json no contiene client_secret para esta aplicación.")
+        client_config["installed"]["client_secret"] = client_secret
+        return client_secret
 
     if os.path.exists(token_file):
         try:
@@ -186,15 +187,15 @@ def _flujo_oauth_propio():
             if creds.valid:
                 return creds
             if creds.expired and creds.refresh_token:
-                creds.refresh(_GReq())
-                _guardar_token_json(token_file, json.loads(creds.to_json()))
+                creds._client_secret = _cargar_client_secret()
+                creds.refresh(Request())
+                with open(token_file, "w", encoding="utf-8") as archivo:
+                    token_data = json.loads(creds.to_json())
+                    token_data.pop("client_secret", None)
+                    json.dump(token_data, archivo, indent=2, ensure_ascii=False)
                 return creds
         except Exception as e:
             print(f"[OAuth] Token inválido, reintentando: {e}")
-            try:
-                os.remove(token_file)
-            except Exception:
-                pass
 
     with _oauth_lock:
         if os.path.exists(token_file):
@@ -205,80 +206,33 @@ def _flujo_oauth_propio():
             except Exception:
                 pass
 
-        _token_recibido = None
-
         _bridge_html(_burbuja(
             '<p style="color:#ffaa44;font-size:13px;">⏳ Iniciando Google OAuth...</p>'
             '<p style="color:#8899bb;font-size:12px;">'
-            'Si el navegador no abre, revisa que el servidor de auth esté activo.<br>'
-            'Jarvis espera a que Google devuelva el token para guardarlo como token.json.</p>'
+            'Se abrirá el navegador para autorizar Jarvis.<br>'
+            'El token se guardará localmente en la carpeta de datos.</p>'
         ))
         _bridge_scroll()
 
         try:
-            srv_ping = requests.get(f"{servidor_auth}/config", timeout=8, allow_redirects=False)
-            print(f"[OAuth] Ping servidor auth: {srv_ping.status_code}")
+            _cargar_client_secret()
+            flujo = InstalledAppFlow.from_client_config(
+                client_config, scopes, autogenerate_code_verifier=True
+            )
+            if _ctx.pop("forzar_selector_cuenta_google", False):
+                creds = flujo.run_local_server(port=0, prompt="select_account")
+            else:
+                creds = flujo.run_local_server(port=0)
+            os.makedirs(os.path.dirname(token_file) or ".", exist_ok=True)
+            with open(token_file, "w", encoding="utf-8") as archivo:
+                token_data = json.loads(creds.to_json())
+                token_data.pop("client_secret", None)
+                json.dump(token_data, archivo, indent=2, ensure_ascii=False)
+            return creds
         except Exception as e:
-            print(f"[OAuth] No se pudo contactar al servidor auth: {e}")
-
-        try:
-            requests.get(f"{servidor_auth}/conectar", timeout=8, allow_redirects=False)
-        except Exception as e:
-            print(f"[OAuth] Error al despertar /conectar: {e}")
-        time.sleep(3)
-
-        class _Handler(BaseHTTPRequestHandler):
-            def do_GET(self):
-                global _token_recibido
-                parsed = urlparse(self.path)
-                codigo = parse_qs(parsed.query).get("codigo", [None])[0]
-                if codigo:
-                    try:
-                        r = requests.get(f"{servidor_auth}/obtener_token/{codigo}", timeout=20)
-                        print(f"[OAuth] obtener_token -> {r.status_code}")
-                        if r.status_code == 200:
-                            try:
-                                _token_recibido = r.json()
-                                print(f"[OAuth] Token recibido: {list(_token_recibido.keys())[:8]}")
-                            except Exception as e:
-                                print(f"[OAuth] JSON del token inválido: {e} | cuerpo={r.text[:250]}")
-                    except Exception as e:
-                        print(f"[OAuth] Error al pedir token: {e}")
-                self.send_response(200)
-                self.end_headers()
-                try:
-                    self.wfile.write(b"OK")
-                except Exception:
-                    pass
-            def log_message(self, *a): pass
-
-        if not _servidor_activo:
-            def _srv():
-                global _servidor_activo
-                _servidor_activo = True
-                try:
-                    HTTPServer(("localhost", 7845), _Handler).handle_request()
-                finally:
-                    _servidor_activo = False
-            threading.Thread(target=_srv, daemon=True).start()
-
-        webbrowser.open(f"{servidor_auth}/conectar")
-        for _ in range(600):
-            if _token_recibido:
-                break
-            time.sleep(0.5)
-
-        if not _token_recibido:
-            print("[OAuth] No se recibió token del servidor de auth.")
+            print(f"[OAuth] Error en el flujo local: {e}")
+            _hablar("No pude completar la autorización local de Google.", None)
             return None
-
-        try:
-            _guardar_token_json(token_file, _token_recibido)
-        except Exception as e:
-            print(f"[OAuth] Error guardando token.json: {e}")
-            return None
-
-        return Credentials.from_authorized_user_file(token_file)
 
 
 def _build(api: str, version: str):
@@ -491,13 +445,15 @@ def gmail_leer(max_msgs: int = 5, chat_widget=None):
 
 def gmail_buscar(consulta: str, chat_widget=None):
     """Busca correos por texto o remitente."""
+    consulta = str(consulta or "").strip()
+    consulta_gmail = _preparar_consulta_gmail(consulta)
     _hablar(f"Buscando en Gmail: {consulta}...", chat_widget)
     svc = _gmail()
     if not svc:
         _hablar("No pude conectar con Gmail.", chat_widget)
         return
     try:
-        res  = svc.users().messages().list(userId="me", q=consulta, maxResults=5).execute()
+        res  = svc.users().messages().list(userId="me", q=consulta_gmail, maxResults=5).execute()
         msgs = res.get("messages", [])
         if not msgs:
             _hablar(f"No encontré correos de '{consulta}'.", chat_widget)
@@ -512,11 +468,12 @@ def gmail_buscar(consulta: str, chat_widget=None):
             headers = {h["name"]: h["value"] for h in msg["payload"]["headers"]}
             asunto  = headers.get("Subject", "(sin asunto)")[:60]
             remite  = headers.get("From", "?")[:40]
+            fecha   = headers.get("Date", "")[:30]
             url     = f"https://mail.google.com/mail/u/0/#search/{m['id']}"
             filas  += (
                 f'<tr><td style="padding:5px 8px;border-bottom:1px solid #1a2740;">'
                 f'<a href="{url}" style="color:#4db8ff;text-decoration:none;">{asunto}</a>'
-                f'<br><span style="color:#8899bb;font-size:11px;">{remite}</span>'
+                f'<br><span style="color:#8899bb;font-size:11px;">{remite} · {fecha}</span>'
                 f'</td></tr>'
             )
         html = (
@@ -530,6 +487,66 @@ def gmail_buscar(consulta: str, chat_widget=None):
     except Exception as e:
         print(f"[Gmail buscar] {e}")
         _hablar("Error buscando en Gmail.", chat_widget)
+
+
+def _preparar_consulta_gmail(consulta: str) -> str:
+    """Convierte peticiones de remitente y resuelve nombres guardados a correos."""
+    consulta = str(consulta or "").strip()
+    if not consulta:
+        return consulta
+
+    normalizar = _ctx.get("quitar_tildes", lambda texto: texto)
+    normalizada = normalizar(consulta.lower())
+    if re.search(r"\b(?:from|to|cc|bcc|subject|after|before|newer_than):", normalizada):
+        return consulta
+
+    email = re.search(r"[\w.+-]+@[\w.-]+\.[A-Za-z]{2,}", consulta)
+    if email:
+        return f"from:{email.group(0)}"
+
+    patrones_remitente = (
+        r"\b(?:enviado(?:s|a|as)?\s+por|que\s+(?:me\s+)?(?:haya|han|ha|habian|habia)?\s*enviado)\s+(.+)$",
+        r"\b(?:correo|correos|email|emails|mensaje|mensajes)\s+(?:de|desde)\s+(.+)$",
+        r"\b(?:de|desde)\s+(.+)$",
+    )
+    remitente = ""
+    for patron in patrones_remitente:
+        coincidencia = re.search(patron, normalizada)
+        if coincidencia:
+            remitente = coincidencia.group(1).strip(" .,!?:;…\"'“”‘’")
+            break
+
+    if not remitente and len(normalizada.split()) <= 3:
+        remitente = normalizada.strip(" .,!?:;…\"'“”‘’")
+    if not remitente:
+        return consulta
+
+    palabras_relleno = {"el", "la", "los", "las", "un", "una", "de", "del", "correo", "correos", "email", "emails"}
+    detalle = ""
+    coincidencia_detalle = re.search(
+        r"\s+(?:sobre|con asunto|asunto|que (?:contenga|diga)|relacionado con)\s+(.+)$",
+        remitente,
+    )
+    if coincidencia_detalle:
+        detalle = coincidencia_detalle.group(1).strip(" .,!?:;")
+        remitente = remitente[:coincidencia_detalle.start()].strip()
+    remitente = " ".join(p for p in remitente.split() if p not in palabras_relleno)
+    if not remitente:
+        return consulta
+
+    contacto_fn = _ctx.get("obtener_contacto_confianza")
+    try:
+        contacto = contacto_fn(remitente) if contacto_fn else None
+    except Exception as exc:
+        print(f"[Gmail buscar] No se pudo resolver el contacto: {type(exc).__name__}")
+        contacto = None
+
+    correo = str((contacto or {}).get("correo") or (contacto or {}).get("destino") or "").strip()
+    if correo:
+        return f"from:{correo}" + (f" {detalle}" if detalle else "")
+    if re.fullmatch(r"[\w .+'-]+", remitente):
+        return f'from:"{remitente}"' + (f" {detalle}" if detalle else "")
+    return consulta
 
 
 def gmail_enviar(destinatario: str, asunto: str, cuerpo: str, chat_widget=None, nombre_contacto: str = ""):
