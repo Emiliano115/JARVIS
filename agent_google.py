@@ -51,7 +51,7 @@ import os
 import re
 import threading
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import date, datetime, timedelta, timezone
 from email.mime.text import MIMEText
 from html import escape
 
@@ -111,6 +111,39 @@ def _config():
 def _quitar_tildes(texto):
     return _ctx["quitar_tildes"](texto)
 
+
+def _coincidencia_por_titulo(items, consulta: str, campo: str):
+    """Elige coincidencia exacta o única por palabras y reporta empates."""
+    def normalizar(valor):
+        return " ".join(re.findall(r"[\w]+", _quitar_tildes(str(valor or "").lower()))).strip()
+
+    objetivo = normalizar(consulta)
+    if not objetivo:
+        return None, False
+    exactos = [item for item in items if normalizar(item.get(campo)) == objetivo]
+    if len(exactos) == 1:
+        return exactos[0], False
+    if len(exactos) > 1:
+        return None, True
+    tokens = set(objetivo.split())
+    puntuados = []
+    for item in items:
+        nombre = normalizar(item.get(campo))
+        tokens_nombre = set(nombre.split())
+        comun = tokens & tokens_nombre
+        if comun:
+            score = len(comun) / len(tokens)
+            if objetivo in nombre or nombre in objetivo:
+                score += 0.25
+            puntuados.append((score, item))
+    if not puntuados:
+        return None, False
+    mejor_score = max(score for score, _ in puntuados)
+    mejores = [item for score, item in puntuados if score == mejor_score]
+    if mejor_score < 0.5 or len(mejores) != 1:
+        return None, True
+    return mejores[0], False
+
 def _formatear_fecha(fecha_str):
     fn = _ctx.get("formatear_fecha")
     if fn:
@@ -155,6 +188,13 @@ def _obtener_credenciales():
     credentials_file = os.path.join(resource_path, "credentials.json")
     token_file = os.path.join(data_path, "token.json")
     scopes = _ctx.get("SCOPES", [])
+    weather_scope = "https://www.googleapis.com/auth/cloud-platform"
+
+    def _token_tiene_scope_clima(token_data):
+        # No basta con pasar scopes=SCOPES al constructor: eso solo etiqueta
+        # las credenciales localmente. Confirmamos que Google realmente otorgó
+        # el scope antes de reutilizar o renovar un token antiguo.
+        return weather_scope in (token_data.get("scopes") or [])
 
     # Cliente OAuth instalado de Jarvis. PKCE evita incluir un client_secret
     # en el ejecutable o en el código fuente distribuido.
@@ -183,15 +223,21 @@ def _obtener_credenciales():
 
     if os.path.exists(token_file):
         try:
-            creds = Credentials.from_authorized_user_file(token_file)
-            if creds.valid:
+            # from_authorized_user_file exige client_secret incluso antes de
+            # poder refrescar. Las versiones anteriores lo quitaban del JSON,
+            # así que cargamos el secreto local antes de construir Credentials.
+            with open(token_file, "r", encoding="utf-8") as archivo:
+                token_data = json.load(archivo)
+            if not token_data.get("client_secret"):
+                token_data["client_secret"] = _cargar_client_secret()
+            tiene_scope_clima = _token_tiene_scope_clima(token_data)
+            creds = Credentials.from_authorized_user_info(token_data, scopes=scopes)
+            if creds.valid and tiene_scope_clima:
                 return creds
-            if creds.expired and creds.refresh_token:
-                creds._client_secret = _cargar_client_secret()
+            if creds.expired and creds.refresh_token and tiene_scope_clima:
                 creds.refresh(Request())
                 with open(token_file, "w", encoding="utf-8") as archivo:
                     token_data = json.loads(creds.to_json())
-                    token_data.pop("client_secret", None)
                     json.dump(token_data, archivo, indent=2, ensure_ascii=False)
                 return creds
         except Exception as e:
@@ -200,8 +246,12 @@ def _obtener_credenciales():
     with _oauth_lock:
         if os.path.exists(token_file):
             try:
-                creds = Credentials.from_authorized_user_file(token_file)
-                if creds.valid:
+                with open(token_file, "r", encoding="utf-8") as archivo:
+                    token_data = json.load(archivo)
+                if not token_data.get("client_secret"):
+                    token_data["client_secret"] = _cargar_client_secret()
+                creds = Credentials.from_authorized_user_info(token_data, scopes=scopes)
+                if creds.valid and _token_tiene_scope_clima(token_data):
                     return creds
             except Exception:
                 pass
@@ -220,13 +270,14 @@ def _obtener_credenciales():
                 client_config, scopes, autogenerate_code_verifier=True
             )
             if _ctx.pop("forzar_selector_cuenta_google", False):
-                creds = flujo.run_local_server(port=0, prompt="select_account")
+                creds = flujo.run_local_server(port=0, prompt="select_account consent")
             else:
-                creds = flujo.run_local_server(port=0)
+                # Solicitar consentimiento de nuevo permite añadir el scope de
+                # Weather a los token.json existentes sin claves aparte.
+                creds = flujo.run_local_server(port=0, prompt="consent")
             os.makedirs(os.path.dirname(token_file) or ".", exist_ok=True)
             with open(token_file, "w", encoding="utf-8") as archivo:
                 token_data = json.loads(creds.to_json())
-                token_data.pop("client_secret", None)
                 json.dump(token_data, archivo, indent=2, ensure_ascii=False)
             return creds
         except Exception as e:
@@ -424,8 +475,8 @@ def gmail_leer(max_msgs: int = 5, chat_widget=None):
             url     = f"https://mail.google.com/mail/u/0/#inbox/{m['id']}"
             filas  += (
                 f'<tr><td style="padding:5px 8px;border-bottom:1px solid #1a2740;">'
-                f'<a href="{url}" style="color:#4db8ff;text-decoration:none;font-size:13px;">{asunto}</a>'
-                f'<br><span style="color:#8899bb;font-size:11px;">{remite} · {fecha}</span>'
+                f'<a href="{escape(url, quote=True)}" style="color:#4db8ff;text-decoration:none;font-size:13px;">{escape(asunto)}</a>'
+                f'<br><span style="color:#8899bb;font-size:11px;">{escape(remite)} · {escape(fecha)}</span>'
                 f'</td></tr>'
             )
             resumen_voz.append(asunto)
@@ -472,12 +523,12 @@ def gmail_buscar(consulta: str, chat_widget=None):
             url     = f"https://mail.google.com/mail/u/0/#search/{m['id']}"
             filas  += (
                 f'<tr><td style="padding:5px 8px;border-bottom:1px solid #1a2740;">'
-                f'<a href="{url}" style="color:#4db8ff;text-decoration:none;">{asunto}</a>'
-                f'<br><span style="color:#8899bb;font-size:11px;">{remite} · {fecha}</span>'
+                f'<a href="{escape(url, quote=True)}" style="color:#4db8ff;text-decoration:none;">{escape(asunto)}</a>'
+                f'<br><span style="color:#8899bb;font-size:11px;">{escape(remite)} · {escape(fecha)}</span>'
                 f'</td></tr>'
             )
         html = (
-            f'<b>📧 Resultados: "{consulta}"</b>'
+            f'<b>📧 Resultados: "{escape(consulta)}"</b>'
             f'<br><table width="100%">{filas}</table>'
             f'<br><span style="color:#556677;font-size:11px;">📡 Gmail API</span>'
         )
@@ -558,7 +609,19 @@ def gmail_enviar(destinatario: str, asunto: str, cuerpo: str, chat_widget=None, 
     if not destinatario:
         _hablar("Necesito un destinatario para preparar el correo.", chat_widget)
         return
-    if not re.fullmatch(r"[^\s@]+@[^\s@]+\.[^\s@]+", destinatario):
+    partes_correo = destinatario.rsplit("@", 1)
+    correo_valido = len(partes_correo) == 2
+    if correo_valido:
+        local, dominio = partes_correo
+        etiquetas = dominio.split(".")
+        correo_valido = (
+            bool(re.fullmatch(r"[A-Za-z0-9.!#$%&'*+/=?^_`{|}~-]+", local))
+            and not local.startswith(".") and not local.endswith(".") and ".." not in local
+            and len(etiquetas) >= 2
+            and all(re.fullmatch(r"[A-Za-z0-9](?:[A-Za-z0-9-]{0,61}[A-Za-z0-9])?", e) for e in etiquetas)
+            and len(etiquetas[-1]) >= 2
+        )
+    if not correo_valido:
         _hablar("No reconocí un correo completo. Repítelo con el nombre, arroba y dominio.", chat_widget)
         return
 
@@ -578,8 +641,8 @@ def gmail_enviar(destinatario: str, asunto: str, cuerpo: str, chat_widget=None, 
     _hablar(f"He preparado el correo. {resumen} ¿Confirmas que lo envíe?", chat_widget)
     html = (
         '<b>📧 Correo listo para enviar</b><br>'
-        f'<span style="color:#8899bb;">Para:</span> <span style="color:#4db8ff;">{destinatario}</span><br>'
-        f'<span style="color:#8899bb;">Asunto:</span> <span style="color:#cce0ff;">{asunto}</span><br>'
+        f'<span style="color:#8899bb;">Para:</span> <span style="color:#4db8ff;">{escape(destinatario)}</span><br>'
+        f'<span style="color:#8899bb;">Asunto:</span> <span style="color:#cce0ff;">{escape(asunto)}</span><br>'
         '<span style="color:#ffaa44;">Di "sí, envíalo" para confirmar o "cancela" para descartarlo.</span>'
     )
     _bridge_html(_burbuja(html))
@@ -651,8 +714,8 @@ def _enviar_correo_confirmado(destinatario: str, asunto: str, cuerpo: str,
         _hablar(f"Correo enviado a {destinatario}.", chat_widget)
         html = (
             f'<b>📧 Correo enviado</b><br>'
-            f'<span style="color:#8899bb;">Para:</span> <span style="color:#4db8ff;">{destinatario}</span><br>'
-            f'<span style="color:#8899bb;">Asunto:</span> <span style="color:#cce0ff;">{asunto}</span>'
+            f'<span style="color:#8899bb;">Para:</span> <span style="color:#4db8ff;">{escape(destinatario)}</span><br>'
+            f'<span style="color:#8899bb;">Asunto:</span> <span style="color:#cce0ff;">{escape(asunto)}</span>'
         )
         _bridge_html(_burbuja(html))
         _bridge_scroll()
@@ -746,7 +809,7 @@ def calendar_ver_eventos(chat_widget=None):
         _hablar("Necesito que autorices el acceso a Google Calendar.", chat_widget)
         return
     try:
-        ahora = datetime.utcnow().isoformat() + "Z"
+        ahora = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
         res   = svc.events().list(
             calendarId="primary", maxResults=10,
             singleEvents=True, orderBy="startTime", timeMin=ahora,
@@ -788,8 +851,8 @@ def calendar_ver_eventos(chat_widget=None):
                 etiqueta = fecha_str
 
             filas += (
-                f'<tr><td style="color:#4db8ff;padding:4px 10px;font-size:13px;">{titulo}</td>'
-                f'<td style="color:#8899bb;font-size:12px;padding:4px 8px;">{etiqueta}</td></tr>'
+                f'<tr><td style="color:#4db8ff;padding:4px 10px;font-size:13px;">{escape(str(titulo))}</td>'
+                f'<td style="color:#8899bb;font-size:12px;padding:4px 8px;">{escape(str(etiqueta))}</td></tr>'
             )
             voz.append(f"{titulo} — {etiqueta}")
 
@@ -812,7 +875,11 @@ def calendar_crear_evento(comando: str, chat_widget=None):
     if not svc:
         _hablar("No pude conectar con Google Calendar.", chat_widget)
         return
-    nombre, fecha, hora = _extraer_nombre_fecha_hora(comando, tipo="evento")
+    try:
+        nombre, fecha, hora = _extraer_nombre_fecha_hora(str(comando or ""), tipo="evento")
+    except (TypeError, ValueError, OverflowError):
+        _hablar("No entendí la fecha o la hora del evento. Revisa que sean válidas e inténtalo de nuevo.", chat_widget)
+        return
     start = fecha.isoformat()
     end   = (fecha + timedelta(hours=1)).isoformat()
     try:
@@ -827,7 +894,7 @@ def calendar_crear_evento(comando: str, chat_widget=None):
         _hablar(f"Reunión '{nombre}' creada el {_formatear_fecha(start)}.", chat_widget)
         html = (
             f'<b>📅 Evento creado</b><br>'
-            f'<span style="color:#4db8ff;">{nombre}</span>'
+            f'<span style="color:#4db8ff;">{escape(nombre)}</span>'
             f'<br><span style="color:#8899bb;font-size:12px;">{_formatear_fecha(start)}</span>'
         )
         _bridge_html(_burbuja(html))
@@ -844,17 +911,16 @@ def calendar_eliminar_evento(nombre_buscar: str, chat_widget=None):
         _hablar("No pude conectar con Google Calendar.", chat_widget)
         return
     try:
-        ahora   = datetime.utcnow().isoformat() + "Z"
+        ahora   = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
         res     = svc.events().list(
-            calendarId="primary", maxResults=20,
+            calendarId="primary", maxResults=100,
             singleEvents=True, orderBy="startTime", timeMin=ahora,
         ).execute()
         eventos = res.get("items", [])
-        nb      = _quitar_tildes(nombre_buscar.lower())
-        evento  = next(
-            (e for e in eventos if nb in _quitar_tildes(e.get("summary", "").lower())),
-            eventos[0] if eventos else None,
-        )
+        evento, ambiguo = _coincidencia_por_titulo(eventos, nombre_buscar, "summary")
+        if ambiguo:
+            _hablar("Encontré varios eventos parecidos. Dime el título más completo para elegir el correcto.", chat_widget)
+            return
         if not evento:
             _hablar("No encontré reuniones para eliminar.", chat_widget)
             return
@@ -873,27 +939,70 @@ def calendar_editar_evento(nombre_buscar: str, nombre_nuevo: str = None,
         _hablar("No pude conectar con Google Calendar.", chat_widget)
         return
     try:
-        ahora   = datetime.utcnow().isoformat() + "Z"
+        ahora   = datetime.now(timezone.utc).isoformat(timespec="seconds").replace("+00:00", "Z")
         res     = svc.events().list(
-            calendarId="primary", maxResults=20,
+            calendarId="primary", maxResults=100,
             singleEvents=True, orderBy="startTime", timeMin=ahora,
         ).execute()
         eventos = res.get("items", [])
-        nb      = _quitar_tildes(nombre_buscar.lower())
-        evento  = next(
-            (e for e in eventos if nb in _quitar_tildes(e.get("summary", "").lower())),
-            None,
-        )
+        if not str(nombre_buscar or "").strip():
+            _hablar("Dime el nombre o una parte del evento que quieres editar.", chat_widget)
+            return
+        evento, ambiguo = _coincidencia_por_titulo(eventos, nombre_buscar, "summary")
+        if ambiguo:
+            _hablar("Encontré varios eventos parecidos. Dime el título más completo para elegir el correcto.", chat_widget)
+            return
         if not evento:
             _hablar(f"No encontré ningún evento con '{nombre_buscar}'.", chat_widget)
             return
-        body = {"summary": nombre_nuevo or evento["summary"]}
-        if fecha_str and hora is not None:
-            inicio = datetime.fromisoformat(fecha_str).replace(hour=hora, minute=0)
+        body = {}
+        if nombre_nuevo:
+            body["summary"] = str(nombre_nuevo).strip()
+        if fecha_str or hora is not None:
+            inicio_actual = evento.get("start", {}).get("dateTime")
+            if inicio_actual:
+                inicio = datetime.fromisoformat(str(inicio_actual).replace("Z", "+00:00"))
+            else:
+                inicio = datetime.fromisoformat(evento.get("start", {}).get("date", datetime.now().date().isoformat()))
+            if fecha_str:
+                fecha_texto = str(fecha_str).strip()
+                try:
+                    fecha = datetime.fromisoformat(fecha_texto.replace("Z", "+00:00"))
+                except ValueError:
+                    fecha = None
+                    for fmt in ("%d/%m/%Y", "%d-%m-%Y", "%Y-%m-%d"):
+                        try:
+                            fecha = datetime.strptime(fecha_texto, fmt)
+                            break
+                        except ValueError:
+                            continue
+                    if fecha is None:
+                        raise ValueError("Formato de fecha inválido")
+                inicio = inicio.replace(year=fecha.year, month=fecha.month, day=fecha.day)
+            if hora is not None:
+                if isinstance(hora, str):
+                    coincidencia_hora = re.fullmatch(r"\s*(\d{1,2})(?::(\d{2}))?\s*", hora)
+                    if not coincidencia_hora:
+                        raise ValueError("Formato de hora inválido")
+                    hora_num, minuto_num = int(coincidencia_hora.group(1)), int(coincidencia_hora.group(2) or 0)
+                else:
+                    hora_num, minuto_num = int(hora), 0
+                if not 0 <= hora_num <= 23 or not 0 <= minuto_num <= 59:
+                    raise ValueError("Hora fuera de rango")
+                inicio = inicio.replace(hour=hora_num, minute=minuto_num, second=0, microsecond=0)
+            fin_actual = evento.get("end", {}).get("dateTime")
+            duracion = timedelta(hours=1)
+            if fin_actual and evento.get("start", {}).get("dateTime"):
+                duracion = max(timedelta(minutes=1), datetime.fromisoformat(str(fin_actual).replace("Z", "+00:00")) - datetime.fromisoformat(str(evento["start"]["dateTime"]).replace("Z", "+00:00")))
             body["start"] = {"dateTime": inicio.isoformat(), "timeZone": "America/Bogota"}
-            body["end"]   = {"dateTime": (inicio + timedelta(hours=1)).isoformat(), "timeZone": "America/Bogota"}
-        svc.events().update(calendarId="primary", eventId=evento["id"], body=body).execute()
-        _hablar(f"Evento '{body['summary']}' actualizado.", chat_widget)
+            body["end"]   = {"dateTime": (inicio + duracion).isoformat(), "timeZone": "America/Bogota"}
+        if not body:
+            _hablar("Dime el nuevo nombre, la fecha o la hora del evento.", chat_widget)
+            return
+        # `update` reemplaza el recurso completo y rechaza los campos omitidos;
+        # `patch` conserva asistentes, ubicación, descripción y demás detalles.
+        svc.events().patch(calendarId="primary", eventId=evento["id"], body=body).execute()
+        _hablar(f"Evento '{body.get('summary', evento.get('summary', nombre_buscar))}' actualizado.", chat_widget)
     except Exception as e:
         print(f"[Calendar editar] {e}")
         _hablar("Error al editar el evento.", chat_widget)
@@ -946,8 +1055,8 @@ def tasks_ver(chat_widget=None):
             filas += (
                 f'<tr><td style="padding:4px 10px;border-bottom:1px solid #1a2740;">'
                 f'<span style="color:#ffcc44;">☐</span> '
-                f'<span style="color:#cce0ff;">{titulo}</span>'
-                f'<br><span style="color:#8899bb;font-size:11px;">{etiq}</span>'
+                f'<span style="color:#cce0ff;">{escape(titulo)}</span>'
+                f'<br><span style="color:#8899bb;font-size:11px;">{escape(etiq)}</span>'
                 f'</td></tr>'
             )
             voz.append(titulo)
@@ -992,7 +1101,7 @@ def tasks_crear(titulo: str, fecha=None, chat_widget=None):
                 body["due"] = fecha.replace(hour=0, minute=0, second=0, microsecond=0).isoformat() + "Z"
         svc.tasks().insert(tasklist=lid, body=body).execute()
         _hablar(f"Tarea '{titulo}' creada.", chat_widget)
-        _bridge_html(_burbuja(f'<b>✅ Tarea creada</b><br><span style="color:#cce0ff;">{titulo}</span>'))
+        _bridge_html(_burbuja(f'<b>✅ Tarea creada</b><br><span style="color:#cce0ff;">{escape(str(titulo))}</span>'))
         _bridge_scroll()
     except Exception as e:
         print(f"[Tasks crear] {e}")
@@ -1007,13 +1116,12 @@ def tasks_eliminar(titulo_buscar: str, chat_widget=None):
         return
     try:
         lid    = _default_tasklist_id()
-        res    = svc.tasks().list(tasklist=lid, maxResults=20, showCompleted=False).execute()
+        res    = svc.tasks().list(tasklist=lid, maxResults=100, showCompleted=False).execute()
         tareas = res.get("items", [])
-        nb     = _quitar_tildes(titulo_buscar.lower())
-        tarea  = next(
-            (t for t in tareas if nb in _quitar_tildes(t.get("title", "").lower())),
-            None,
-        )
+        tarea, ambiguo = _coincidencia_por_titulo(tareas, titulo_buscar, "title")
+        if ambiguo:
+            _hablar("Encontré varias tareas parecidas. Dime el título más completo para elegir la correcta.", chat_widget)
+            return
         if not tarea:
             _hablar(f"No encontré ninguna tarea con '{titulo_buscar}'.", chat_widget)
             return
@@ -1032,23 +1140,33 @@ def tasks_editar(titulo_buscar: str, titulo_nuevo: str = None, fecha=None, chat_
         return
     try:
         lid    = _default_tasklist_id()
-        res    = svc.tasks().list(tasklist=lid, maxResults=20, showCompleted=False).execute()
+        res    = svc.tasks().list(tasklist=lid, maxResults=100, showCompleted=False).execute()
         tareas = res.get("items", [])
-        nb     = _quitar_tildes(titulo_buscar.lower())
-        tarea  = next(
-            (t for t in tareas if nb in _quitar_tildes(t.get("title", "").lower())),
-            None,
-        )
+        tarea, ambiguo = _coincidencia_por_titulo(tareas, titulo_buscar, "title")
+        if ambiguo:
+            _hablar("Encontré varias tareas parecidas. Dime el título más completo para elegir la correcta.", chat_widget)
+            return
         if not tarea:
             _hablar(f"No encontré ninguna tarea con '{titulo_buscar}'.", chat_widget)
             return
         body = {}
-        if titulo_nuevo:
-            body["title"] = titulo_nuevo
+        if titulo_nuevo and str(titulo_nuevo).strip():
+            body["title"] = str(titulo_nuevo).strip()
         if fecha:
             if isinstance(fecha, str):
-                fecha = datetime.fromisoformat(fecha)
-            body["due"] = fecha.date().isoformat() + "T00:00:00Z"
+                try:
+                    fecha = datetime.fromisoformat(fecha.replace("Z", "+00:00"))
+                except ValueError:
+                    _hablar("No entendí la nueva fecha de la tarea. Indícala con día, mes y año.", chat_widget)
+                    return
+            fecha_due = fecha.date() if isinstance(fecha, datetime) else fecha
+            if not isinstance(fecha_due, date):
+                _hablar("No reconocí la fecha de la tarea.", chat_widget)
+                return
+            body["due"] = fecha_due.isoformat() + "T00:00:00Z"
+        if not body:
+            _hablar("Dime el nuevo título o la nueva fecha de la tarea.", chat_widget)
+            return
         svc.tasks().patch(tasklist=lid, task=tarea["id"], body=body).execute()
         _hablar(f"Tarea '{titulo_nuevo or tarea.get('title')}' actualizada.", chat_widget)
     except Exception as e:
@@ -1091,14 +1209,14 @@ def contactos_buscar(nombre: str, chat_widget=None) -> list:
 
         filas = "".join(
             f'<tr>'
-            f'<td style="color:#4db8ff;padding:4px 10px;">{c["nombre"]}</td>'
-            f'<td style="color:#8899bb;font-size:12px;padding:4px 8px;">{c["email"]}</td>'
-            f'<td style="color:#8899bb;font-size:12px;padding:4px 8px;">{c["tel"]}</td>'
+            f'<td style="color:#4db8ff;padding:4px 10px;">{escape(c["nombre"])}</td>'
+            f'<td style="color:#8899bb;font-size:12px;padding:4px 8px;">{escape(c["email"])}</td>'
+            f'<td style="color:#8899bb;font-size:12px;padding:4px 8px;">{escape(c["tel"])}</td>'
             f'</tr>'
             for c in contactos
         )
         html = (
-            f'<b>👤 Contactos — "{nombre}"</b>'
+            f'<b>👤 Contactos — "{escape(nombre)}"</b>'
             f'<br><table cellspacing="4">{filas}</table>'
             f'<br><span style="color:#556677;font-size:11px;">📡 Google People API</span>'
         )
@@ -1135,7 +1253,16 @@ def drive_buscar(consulta: str, chat_widget=None):
         _hablar("No pude conectar con Google Drive.", chat_widget)
         return
     try:
-        q   = f"name contains '{consulta}' and trashed=false"
+        consulta_query = str(consulta or "").strip()
+        terminos = re.findall(r"[\w@.+-]+", consulta_query, flags=re.UNICODE)
+        if not terminos:
+            _hablar("Dime el nombre o las palabras del archivo que buscas en Drive.", chat_widget)
+            return
+        condiciones = []
+        for termino in terminos[:8]:
+            seguro = termino.replace("\\", "\\\\").replace("'", "\\'")
+            condiciones.append(f"(name contains '{seguro}' or fullText contains '{seguro}')")
+        q = "trashed=false and " + " and ".join(condiciones)
         res = svc.files().list(
             q=q, pageSize=6,
             fields="files(id,name,mimeType,modifiedTime,webViewLink)"
@@ -1153,12 +1280,12 @@ def drive_buscar(consulta: str, chat_widget=None):
             mod  = f.get("modifiedTime", "")[:10]
             filas += (
                 f'<tr><td style="padding:5px 8px;border-bottom:1px solid #1a2740;">'
-                f'{ico} <a href="{url}" style="color:#4db8ff;text-decoration:none;">{name}</a>'
-                f'<br><span style="color:#8899bb;font-size:11px;">Modificado: {mod}</span>'
+                f'{ico} <a href="{escape(url, quote=True)}" style="color:#4db8ff;text-decoration:none;">{escape(name)}</a>'
+                f'<br><span style="color:#8899bb;font-size:11px;">Modificado: {escape(mod)}</span>'
                 f'</td></tr>'
             )
         html = (
-            f'<b>📂 Drive — "{consulta}"</b>'
+            f'<b>📂 Drive — "{escape(str(consulta or ""))}"</b>'
             f'<br><table width="100%">{filas}</table>'
             f'<br><span style="color:#556677;font-size:11px;">📡 Google Drive API</span>'
         )
@@ -1179,11 +1306,15 @@ def ejecutar(accion: str, params: dict, chat_widget=None) -> bool:
     Punto de entrada único desde dispatcher.py.
     Devuelve True si procesó la acción.
     """
-    p = params or {}
+    p = params if isinstance(params, dict) else {}
 
     # ── Gmail ─────────────────────────────────────────────────────────────────
     if accion == "gmail_leer":
-        gmail_leer(int(p.get("max_msgs", 5)), chat_widget)
+        try:
+            max_msgs = int(p.get("max_msgs", 5))
+        except (TypeError, ValueError, OverflowError):
+            max_msgs = 5
+        gmail_leer(max(1, min(max_msgs, 20)), chat_widget)
         return True
 
     if accion == "gmail_buscar":

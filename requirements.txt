@@ -4,6 +4,7 @@ numpy==1.26.4
 Pillow>=10,<12
 sounddevice>=0.5,<1
 pywin32>=306,<312
+pywinauto>=0.6.9,<0.7
 keyboard>=0.13,<1
 pyttsx3>=2.98,<3
 pygame>=2.6,<3
@@ -21,3 +22,7 @@ google-auth-oauthlib>=1.2,<2
 comtypes>=1.4,<2
 pycaw>=20240210
 pytesseract>=0.3,<1
+mss>=10,<11
+wmi>=1.5,<2
+gTTS>=2.5,<3
+langid>=1.1.6,<2

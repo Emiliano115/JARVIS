@@ -35,7 +35,8 @@ from __future__ import annotations
 import re
 import random
 import threading
-from urllib.parse import quote as _url_quote
+from html import escape
+from urllib.parse import quote as _url_quote, urlsplit
 
 import requests
 
@@ -718,23 +719,33 @@ def html_galeria(termino: str, urls: list[str]) -> str:
     Genera HTML de galería horizontal para QTextBrowser.
     Máximo 4 imágenes. Cada imagen es un enlace img: para vista ampliada.
     """
+    termino_html = escape(str(termino or ""))
     if not urls:
         return (
             f'<p style="color:#445566;font-size:12px;font-style:italic;">'
-            f'No encontré imágenes de {termino}</p>'
+            f'No encontré imágenes de {termino_html}</p>'
         )
-    n     = min(len(urls), 4)
-    shown = urls[:n]
+    shown = []
+    for value in urls:
+        url = str(value or "").strip()
+        if urlsplit(url).scheme.lower() in {"http", "https"} and urlsplit(url).netloc:
+            shown.append(url)
+        if len(shown) == 4:
+            break
+    if not shown:
+        return f'<p style="color:#445566;font-size:12px;font-style:italic;">No encontré imágenes de {termino_html}</p>'
+    n     = len(shown)
     w     = max(100, (640 - (n - 1) * 6) // n)
     html  = (
         f'<p style="color:#4db8ff;font-size:12px;font-weight:bold;margin:4px 0 6px 0;">'
-        f'🖼 {termino}</p>'
+        f'🖼 {termino_html}</p>'
         f'<table cellspacing="6" cellpadding="0"><tr>'
     )
     for url in shown:
+        url_html = escape(url, quote=True)
         html += (
-            f'<td><a href="img:{url}">'
-            f'<img src="{url}" width="{w}" height="{w}" '
+            f'<td><a href="img:{url_html}">'
+            f'<img src="{url_html}" width="{w}" height="{w}" '
             f'style="border-radius:6px;object-fit:cover;"/>'
             f'</a></td>'
         )
@@ -767,7 +778,7 @@ def generar_imagen(prompt: str, chat_widget=None) -> bool:
         '<p style="color:#ffaa44;font-size:13px;">'
         '⚙️ <b>Generación de imágenes</b>: módulo pendiente de conectar.<br>'
         '<span style="color:#8899bb;font-size:12px;">'
-        f'Prompt recibido: <i>"{prompt}"</i><br>'
+        f'Prompt recibido: <i>"{escape(str(prompt or ""))}"</i><br>'
         'Cuando agregues la API (Stability AI / DALL·E / Flux), '
         'este agente la usará automáticamente.'
         '</span></p>'
@@ -795,13 +806,14 @@ def ejecutar(accion: str, params: dict, chat_widget=None) -> bool:
 
     Devuelve True si procesó la acción.
     """
+    params = params if isinstance(params, dict) else {}
     if accion == "buscar":
-        termino = params.get("termino", "").strip()
+        termino = str(params.get("termino") or "").strip()
         if not termino:
             return False
         try:
             max_i = max(1, min(10, int(params.get("max_imgs", 3))))
-        except (TypeError, ValueError):
+        except (TypeError, ValueError, OverflowError):
             max_i = 3
 
         def _worker():
@@ -812,7 +824,7 @@ def ejecutar(accion: str, params: dict, chat_widget=None) -> bool:
             else:
                 sin_imgs = (
                     f'<p style="color:#445566;font-size:12px;font-style:italic;">'
-                    f'No encontré imágenes de <b>{termino}</b></p>'
+                    f'No encontré imágenes de <b>{escape(termino)}</b></p>'
                 )
                 _bridge_html(_burbuja(sin_imgs))
                 _bridge_scroll()
@@ -821,7 +833,7 @@ def ejecutar(accion: str, params: dict, chat_widget=None) -> bool:
         return True
 
     if accion == "galeria":
-        termino = params.get("termino", "")
+        termino = str(params.get("termino") or "")
         urls    = params.get("urls", [])
         if urls:
             _bridge_html(_burbuja(html_galeria(termino, urls)))
@@ -829,7 +841,7 @@ def ejecutar(accion: str, params: dict, chat_widget=None) -> bool:
         return True
 
     if accion == "generar":
-        prompt = params.get("prompt", "").strip()
+        prompt = str(params.get("prompt") or "").strip()
         if not prompt:
             return False
         return generar_imagen(prompt, chat_widget)

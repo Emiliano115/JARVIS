@@ -1,4 +1,5 @@
 import os
+from PyInstaller.utils.hooks import collect_all
 
 spec_path = globals().get("SPEC") or os.path.join(os.getcwd(), "Jarvis.spec")
 project = os.path.dirname(os.path.abspath(spec_path))
@@ -22,6 +23,14 @@ hiddenimports = [
     "googleapiclient.discovery",
     "google.oauth2.credentials",
 ]
+
+# These libraries are imported lazily at runtime (voice and optional memory),
+# so PyInstaller's static scanner may otherwise leave them out of the ZIP build.
+for package_name in ("gtts", "langid", "pywinauto"):
+    package_datas, package_binaries, package_hiddenimports = collect_all(package_name)
+    datas += package_datas
+    binaries += package_binaries
+    hiddenimports += package_hiddenimports
 
 hiddenimports += [
     "PySide6.QtCore",

@@ -33,6 +33,7 @@
 from __future__ import annotations
 
 import html
+import html as _html
 import json
 import os
 import re
@@ -41,6 +42,7 @@ import webbrowser
 from urllib.parse import quote as _url_quote, urlparse
 
 import requests
+import idiomas
 
 # =============================================================================
 # CONTEXTO INYECTADO
@@ -73,6 +75,7 @@ def init(ctx: dict):
             "gemini_rotar_key":    _gemini_rotar_key,
             "GROQ_BASE_URL":       GROQ_BASE_URL,
             "GROQ_MODEL":          GROQ_MODEL,
+            "GROQ_MODELOS_FALLBACK": GROQ_MODELOS_FALLBACK,
             "groq_tokens":         _groq_tokens,
             "guardar_tokens":      _guardar_tokens,
             "historial":           lambda: _historial,
@@ -219,6 +222,66 @@ def _latex(txt):
 
 def _limpiar(txt):
     return _ctx["limpiar_html"](txt)
+
+def _detectar_idioma(texto: str) -> tuple[str, str]:
+    """Detect language using langid's broad offline model; retain a short-text fallback."""
+    plano = re.sub(r"<[^>]+>|https?://\S+|\[[^\]]*\]\([^)]*\)", " ", str(texto or ""))
+    code = idiomas.detect_language(plano, fallback="")
+    return code, idiomas.language_name(code) if code else "idioma del usuario"
+
+def _asegurar_respuesta_idioma(texto: str, pregunta: str = "", idioma_destino: str = "") -> str:
+    """Translate a response when it misses the selected or detected reply language."""
+    if not texto:
+        return texto
+    setting = idioma_destino or _ctx.get("idioma_respuesta")
+    destino = setting() if callable(setting) else setting
+    if destino in {None, "", "auto"}:
+        destino, destino_label = _detectar_idioma(pregunta)
+    else:
+        destino = idiomas.normalize_language(destino)
+        destino_label = idiomas.language_name(destino)
+    origen, _ = _detectar_idioma(texto)
+    if not destino or not origen or destino == origen:
+        return texto
+    original = texto
+
+    protegidos = {}
+    def proteger(valor: str) -> str:
+        clave = f"JARVISKEEP{len(protegidos)}TOKEN"
+        protegidos[clave] = valor
+        return clave
+
+    # Mantener intactos enlaces Markdown, HTML y direcciones web.
+    texto = re.sub(r"\[[^\]]*\]\(https?://[^)]+\)", lambda m: proteger(m.group(0)), texto)
+    texto = re.sub(r"https?://\S+", lambda m: proteger(m.group(0)), texto)
+    texto = re.sub(r"</?[a-zA-Z][^>]*>", lambda m: proteger(m.group(0)), texto)
+
+    # Mantener títulos propios que aparezcan en la pregunta aunque tengan dos puntos en la respuesta.
+    titulos = re.findall(r"\b[A-ZÁÉÍÓÚÑ][\w’'-]*(?:\s+[A-ZÁÉÍÓÚÑ][\w’'-]*)+", str(pregunta or ""))
+    for titulo in sorted(titulos, key=len, reverse=True):
+        partes = re.findall(r"[\w]+(?:-[\w]+)*", titulo)
+        if len(partes) < 2:
+            continue
+        patron = r"(?i)\b" + r"[\s:–—-]+".join(re.escape(p) for p in partes) + r"\b"
+        texto = re.sub(patron, lambda m: proteger(m.group(0)), texto)
+
+    traducido = _traducir_con_google(texto, destino)
+    if not traducido:
+        traducido = _traducir_con_groq(texto, "detectado automáticamente", destino_label)
+    if not traducido:
+        traducir_modelo = _ctx.get("traducir_respuesta_modelo")
+        if callable(traducir_modelo):
+            try:
+                traducido = traducir_modelo(texto, destino_label)
+            except Exception as exc:
+                print(f"[BuscarWeb] Traducción con el modelo local/remoto falló: {exc}")
+    if not traducido:
+        print(f"[BuscarWeb] No se pudo traducir la respuesta al idioma detectado ({destino_label}).")
+        return original
+    # Restaurar al revés por si un marcador (como una URL) quedó dentro de una etiqueta HTML protegida.
+    for clave, valor in reversed(list(protegidos.items())):
+        traducido = traducido.replace(clave, valor)
+    return traducido
 
 def _groq_key():
     return _ctx["groq_key_activa"]()
@@ -385,7 +448,7 @@ def obtener_noticias(tema: str = "", categoria: str = "", chat_widget=None):
 # 2. MÓDULO DE CLIMA
 # =============================================================================
 
-def obtener_clima(ciudad: str = "Bogotá", chat_widget=None):
+def obtener_clima(ciudad: str = "Bogotá", chat_widget=None, dia: str = "hoy"):
     """
     Clima usando Open-Meteo (geocodificación + forecast).
     Completamente gratuito, sin API key.
@@ -408,13 +471,103 @@ def obtener_clima(ciudad: str = "Bogotá", chat_widget=None):
         nombre = lugar.get("name", ciudad)
         pais   = lugar.get("country", "")
 
+        # Reutilizar OAuth de Google; no hace falta configurar una clave
+        # independiente para Weather. Para "hoy" se consulta condiciones
+        # actuales, no el tramo diurno del pronóstico (que puede diferir del móvil).
+        weather_credentials_getter = _ctx.get("GOOGLE_WEATHER_CREDENTIALS")
+        weather_credentials = weather_credentials_getter() if callable(weather_credentials_getter) else None
+        if weather_credentials and weather_credentials.token:
+            try:
+                es_manana = str(dia).lower().startswith(("mañ", "man"))
+                if not es_manana:
+                    actual_r = requests.get(
+                        "https://weather.googleapis.com/v1/currentConditions:lookup",
+                        params={
+                            "location.latitude": lat,
+                            "location.longitude": lon,
+                            "unitsSystem": "METRIC",
+                            "languageCode": "es",
+                        },
+                        headers={"Authorization": f"Bearer {weather_credentials.token}"},
+                        timeout=12,
+                    )
+                    if actual_r.status_code == 200:
+                        actual = actual_r.json()
+                        condicion_actual = actual.get("weatherCondition", {}).get("description", {}).get("text", "Sin descripción")
+                        temperatura = actual.get("temperature", {}).get("degrees", "?")
+                        sensacion = actual.get("feelsLikeTemperature", {}).get("degrees", "?")
+                        humedad_actual = actual.get("relativeHumidity", "?")
+                        viento_actual = actual.get("wind", {}).get("speed", {}).get("value", "?")
+                        lluvia_actual = actual.get("precipitation", {}).get("probability", {}).get("percent", "?")
+                        hora_actual = actual.get("currentTime", "")
+                        html_actual = (
+                            f'<b>🌡 Clima actual en { _html.escape(nombre)}, { _html.escape(pais)}</b><br><br>'
+                            f'<table cellspacing="0" cellpadding="0" style="border-collapse:collapse;">'
+                            f'<tr><td style="padding:4px 12px 4px 0;color:#8899bb;">Condición</td><td style="color:#dde6f5;">{_html.escape(str(condicion_actual))}</td></tr>'
+                            f'<tr><td style="padding:4px 12px 4px 0;color:#8899bb;">Temperatura</td><td style="color:#dde6f5;"><b>{temperatura} °C</b> · sensación {sensacion} °C</td></tr>'
+                            f'<tr><td style="padding:4px 12px 4px 0;color:#8899bb;">Humedad</td><td style="color:#dde6f5;">{humedad_actual}%</td></tr>'
+                            f'<tr><td style="padding:4px 12px 4px 0;color:#8899bb;">Viento</td><td style="color:#dde6f5;">{viento_actual} km/h</td></tr>'
+                            f'<tr><td style="padding:4px 12px 4px 0;color:#8899bb;">Prob. lluvia</td><td style="color:#dde6f5;">{lluvia_actual}%</td></tr>'
+                            f'</table><br><span style="color:#556677;font-size:11px;">📡 Google Weather · actualizado { _html.escape(str(hora_actual))}</span>'
+                        )
+                        _bridge_html(_burbuja(html_actual))
+                        _bridge_scroll()
+                        _hablar(f"El clima actual en {nombre}: {condicion_actual}, {temperatura} grados, sensación de {sensacion}, humedad del {humedad_actual} por ciento.", chat_widget)
+                        _log_historial_jarvis(f"Clima actual Google Weather en {nombre}, {pais}: {condicion_actual}, {temperatura}°C.")
+                        return
+                    print(f"[Google Weather actual] HTTP {actual_r.status_code}: {actual_r.text[:220]}; usaré el pronóstico")
+
+                google_r = requests.get(
+                    "https://weather.googleapis.com/v1/forecast/days:lookup",
+                    params={
+                        "location.latitude": lat,
+                        "location.longitude": lon,
+                        "days": 2,
+                        "languageCode": "es",
+                    },
+                    headers={"Authorization": f"Bearer {weather_credentials.token}"},
+                    timeout=12,
+                )
+                if google_r.status_code == 200:
+                    dias = google_r.json().get("forecastDays", [])
+                    indice_google = 1 if es_manana else 0
+                    if len(dias) > indice_google:
+                        prediccion = dias[indice_google]
+                        tramo = prediccion.get("daytimeForecast", {})
+                        condicion = tramo.get("weatherCondition", {}).get("description", {}).get("text", "Sin descripción")
+                        maximo = prediccion.get("maxTemperature", {}).get("degrees", "?")
+                        minimo = prediccion.get("minTemperature", {}).get("degrees", "?")
+                        humedad_google = tramo.get("relativeHumidity", "?")
+                        lluvia_google = tramo.get("precipitation", {}).get("probability", {}).get("percent", "?")
+                        viento_google = tramo.get("wind", {}).get("speed", {}).get("value", "?")
+                        dia_texto_google = "mañana" if indice_google else "hoy"
+                        html_google = (
+                            f'<b>🌡 Pronóstico para {dia_texto_google} en {nombre}, {pais}</b><br><br>'
+                            f'<table cellspacing="0" cellpadding="0" style="border-collapse:collapse;">'
+                            f'<tr><td style="padding:4px 12px 4px 0;color:#8899bb;">Condición</td><td style="color:#dde6f5;">{_html.escape(str(condicion))}</td></tr>'
+                            f'<tr><td style="padding:4px 12px 4px 0;color:#8899bb;">Temperatura</td><td style="color:#dde6f5;"><b>{maximo}°C máx.</b> · {minimo}°C mín.</td></tr>'
+                            f'<tr><td style="padding:4px 12px 4px 0;color:#8899bb;">Humedad</td><td style="color:#dde6f5;">{humedad_google}%</td></tr>'
+                            f'<tr><td style="padding:4px 12px 4px 0;color:#8899bb;">Viento</td><td style="color:#dde6f5;">{viento_google} km/h</td></tr>'
+                            f'<tr><td style="padding:4px 12px 4px 0;color:#8899bb;">Prob. lluvia</td><td style="color:#dde6f5;">{lluvia_google}%</td></tr>'
+                            f'</table><br><span style="color:#556677;font-size:11px;">📡 Google Weather</span>'
+                        )
+                        _bridge_html(_burbuja(html_google))
+                        _bridge_scroll()
+                        _hablar(f"El pronóstico de Google Weather para {dia_texto_google} en {nombre}: {condicion}, máxima de {maximo} y mínima de {minimo} grados.", chat_widget)
+                        _log_historial_jarvis(f"Clima de Google Weather en {nombre}, {pais}: {condicion}, máxima {maximo}°C y mínima {minimo}°C.")
+                        return
+                else:
+                    print(f"[Google Weather] HTTP {google_r.status_code}: {google_r.text[:220]}; usaré respaldo")
+            except Exception as google_exc:
+                print(f"[Google Weather] {google_exc}; usaré respaldo")
+
         # Paso 2: pronóstico actual
         meteo_url = (
             f"https://api.open-meteo.com/v1/forecast"
             f"?latitude={lat}&longitude={lon}"
             f"&current=temperature_2m,relative_humidity_2m,weathercode,windspeed_10m"
-            f"&daily=temperature_2m_max,temperature_2m_min,precipitation_probability_max"
-            f"&timezone=auto&forecast_days=1"
+            f"&daily=weathercode,temperature_2m_max,temperature_2m_min,precipitation_probability_max"
+            f"&timezone=auto&forecast_days=2"
         )
         met_r = requests.get(meteo_url, timeout=8)
         if met_r.status_code != 200:
@@ -425,13 +578,15 @@ def obtener_clima(ciudad: str = "Bogotá", chat_widget=None):
         current = data.get("current", {})
         daily   = data.get("daily", {})
 
-        temp    = current.get("temperature_2m", "?")
+        indice_dia = 1 if str(dia).lower().startswith("mañ") else 0
+        dia_texto = "mañana" if indice_dia else "hoy"
+        temp    = current.get("temperature_2m", "?") if indice_dia == 0 else "—"
         humedad = current.get("relative_humidity_2m", "?")
         viento  = current.get("windspeed_10m", "?")
         wcode   = current.get("weathercode", 0)
-        t_max   = daily.get("temperature_2m_max", ["?"])[0]
-        t_min   = daily.get("temperature_2m_min", ["?"])[0]
-        lluvia  = daily.get("precipitation_probability_max", [0])[0]
+        t_max   = daily.get("temperature_2m_max", ["?", "?"])[indice_dia]
+        t_min   = daily.get("temperature_2m_min", ["?", "?"])[indice_dia]
+        lluvia  = daily.get("precipitation_probability_max", [0, 0])[indice_dia]
 
         _WCODE = {
             0: "Despejado ☀️",             1: "Principalmente despejado 🌤",
@@ -445,10 +600,12 @@ def obtener_clima(ciudad: str = "Bogotá", chat_widget=None):
             81: "Chubascos moderados 🌦",   82: "Chubascos fuertes 🌦",
             95: "Tormenta ⛈",              96: "Tormenta con granizo ⛈",
         }
-        descripcion = _WCODE.get(wcode, f"Código {wcode}")
+        wcode_dia = daily.get("weathercode", [wcode, wcode])
+        codigo_dia = wcode_dia[indice_dia] if len(wcode_dia) > indice_dia else wcode
+        descripcion = _WCODE.get(codigo_dia, f"Código {codigo_dia}")
 
         html = (
-            f'<b>🌡 Clima en {nombre}, {pais}</b><br><br>'
+            f'<b>🌡 Pronóstico para {dia_texto} en {nombre}, {pais}</b><br><br>'
             f'<table cellspacing="0" cellpadding="0" style="border-collapse:collapse;">'
             f'<tr><td style="padding:4px 12px 4px 0;color:#8899bb;">Condición</td>'
             f'<td style="color:#dde6f5;">{descripcion}</td></tr>'
@@ -467,7 +624,7 @@ def obtener_clima(ciudad: str = "Bogotá", chat_widget=None):
         _bridge_scroll()
 
         consejo = " Lleva paraguas." if lluvia and int(lluvia) >= 60 else ""
-        _hablar(f"En {nombre}: {descripcion.split()[0]}, {temp} grados.{consejo}", chat_widget)
+        _hablar(f"El pronóstico para {dia_texto} en {nombre}: {descripcion.split()[0]}, máxima de {t_max} y mínima de {t_min} grados.{consejo}", chat_widget)
         _log_historial_jarvis(f"Clima en {nombre}, {pais}: {descripcion}, {temp}°C, humedad {humedad}%.")
 
     except Exception as e:
@@ -513,10 +670,10 @@ def _calcular_con_claude(comando: str, chat_widget=None) -> bool:
     _hablar("Calculando...", chat_widget)
     system = (
         "Eres un experto en física analítica y matemática universitaria. "
-        "Resuelve el ejercicio con rigor total, paso a paso. "
+        "Resuelve el ejercicio con rigor total, paso a paso y responde en el mismo idioma de la petición. "
         "Usa LaTeX para TODAS las expresiones matemáticas: "
         "inline con \\(...\\) y en bloque con \\[...\\]. "
-        "Responde en español colombiano. Sé conciso pero completo. "
+        "Responde en el mismo idioma del mensaje del usuario. Sé conciso pero completo. "
         "NUNCA cometas errores matemáticos. Verifica cada paso antes de escribirlo. "
         "Usa HTML para estructura: <h4> para secciones, <p> para texto, <b> para énfasis. "
         "NO uses markdown. Solo HTML + LaTeX."
@@ -726,8 +883,8 @@ def buscar_web(pregunta: str, termino_imagen: str = None, chat_widget=None) -> b
     system = (
         "Eres Jarvis, asistente de IA personal. Hablas de forma formal, precisa y profesional, como Jarvis de Iron Man. "
         "Evita modismos, expresiones de la calle y palabras como 'parce'. "
-        "RESPONDE SIEMPRE en español, sin importar el idioma de las fuentes encontradas en la búsqueda. "
-        "NUNCA respondas en inglés ni mezcles idiomas, incluso si los resultados de búsqueda están en inglés. "
+        f"Responde únicamente en {idiomas.language_name((_ctx.get('idioma_respuesta')() if callable(_ctx.get('idioma_respuesta')) else _ctx.get('idioma_respuesta')) or _detectar_idioma(pregunta)[0])}, "
+        "aunque las fuentes estén en otro idioma. No dejes que el historial cambie esta elección. "
         "Máximo 3-4 oraciones, o una tabla, o 4 bullets MUY cortos — elige el formato que mejor represente el dato. "
         "NUNCA uses títulos, subtítulos ni secciones (nada de 'Características:', 'Hábitat:', etc). "
         "Para animales/personas/lugares/películas/series: di lo más interesante de forma fluida en un párrafo. "
@@ -797,6 +954,8 @@ def buscar_web(pregunta: str, termino_imagen: str = None, chat_widget=None) -> b
     if not html_respuesta:
         return _buscar_con_groq(pregunta, chat_widget)
 
+    html_respuesta = _asegurar_respuesta_idioma(html_respuesta, pregunta)
+
     if _debe_incluir_fuentes_apa(pregunta):
         html_respuesta = _postprocesar_respuesta_investigacion(html_respuesta, pregunta)
 
@@ -828,7 +987,7 @@ def buscar_web(pregunta: str, termino_imagen: str = None, chat_widget=None) -> b
 
 
 def _buscar_con_groq(pregunta: str, chat_widget=None) -> bool:
-    """Búsqueda/respuesta de conocimiento general vía Groq (Llama 3.3 70B)."""
+    """Búsqueda web con Browser Search de Groq y respaldo entre modelos activos."""
     if not _ctx["KEYS_LISTAS"].is_set():
         _ctx["KEYS_LISTAS"].wait(timeout=60)
 
@@ -839,8 +998,10 @@ def _buscar_con_groq(pregunta: str, chat_widget=None) -> bool:
 
     system = (
         "Eres Jarvis, asistente de IA personal. Habla como una persona, directo y natural. "
-        "RESPONDE SIEMPRE en español, sin importar el idioma de las fuentes encontradas en la búsqueda. "
-        "NUNCA respondas en inglés ni mezcles idiomas, incluso si los resultados de búsqueda están en inglés. "
+        "Usa la búsqueda web para comprobar la respuesta y prioriza fuentes oficiales o primarias. "
+        f"Responde únicamente en {idiomas.language_name((_ctx.get('idioma_respuesta')() if callable(_ctx.get('idioma_respuesta')) else _ctx.get('idioma_respuesta')) or _detectar_idioma(pregunta)[0])}, "
+        "aunque las fuentes estén en otro idioma. No dejes que el historial cambie esta elección. "
+        "Incluye enlaces/citas de las fuentes consultadas cuando estén disponibles; no inventes fuentes. "
         "Máximo 3 oraciones, o una tabla HTML <table> si el dato es tabular (fechas, calendarios, comparativas), "
         "o 4 bullets cortos con <ul><li>. "
         "NUNCA uses títulos ni secciones. Sin markdown. Nunca uses '*' ni '-' como viñeta de texto plano "
@@ -848,53 +1009,113 @@ def _buscar_con_groq(pregunta: str, chat_widget=None) -> bool:
         "Si no sabes algo, dilo en una sola línea."
     )
 
-    for _intento in range(len(groq_keys) * 2):
-        headers = {
-            "Authorization": f"Bearer {_groq_key()}",
-            "Content-Type":  "application/json",
-        }
-        payload = {
-            "model":    _ctx["GROQ_MODEL"],
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user",   "content": pregunta},
-            ],
-            "temperature": 0.4,
-            "max_tokens":  1000,
-        }
-        try:
-            resp = requests.post(
-                _ctx["GROQ_BASE_URL"], json=payload, headers=headers, timeout=20
-            )
-        except requests.exceptions.ConnectionError:
-            time.sleep(2)
-            continue
+    modelos_configurados = _ctx.get("GROQ_MODELOS_FALLBACK", [])
+    if callable(modelos_configurados):
+        modelos_configurados = modelos_configurados()
+    modelos = []
+    for modelo in [
+        _ctx.get("GROQ_MODEL", "openai/gpt-oss-120b"),
+        *(modelos_configurados or []),
+        "openai/gpt-oss-20b",
+    ]:
+        if modelo and modelo not in modelos:
+            modelos.append(modelo)
 
-        if resp.status_code == 429:
-            _rotar_groq("429")
-            time.sleep(1)
-            continue
-        if resp.status_code == 401:
-            _rotar_groq("401")
-            continue
-        if resp.status_code != 200:
-            print(f"[Groq search] HTTP {resp.status_code}")
-            return False
+    ultimo_error = ""
+    for modelo in modelos:
+        for _intento in range(max(1, len(groq_keys) * 2)):
+            headers = {
+                "Authorization": f"Bearer {_groq_key()}",
+                "Content-Type":  "application/json",
+            }
+            payload = {
+                "model": modelo,
+                "messages": [
+                    {"role": "system", "content": system},
+                    {"role": "user", "content": pregunta},
+                ],
+                "temperature": 1,
+                "max_completion_tokens": 1200,
+                "reasoning_effort": "low",
+                "tool_choice": "required",
+                "tools": [{"type": "browser_search"}],
+            }
+            try:
+                resp = requests.post(
+                    _ctx["GROQ_BASE_URL"], json=payload, headers=headers, timeout=60
+                )
+            except requests.exceptions.ConnectionError:
+                time.sleep(2)
+                continue
+            except requests.exceptions.RequestException as exc:
+                ultimo_error = f"Error de conexión: {type(exc).__name__}"
+                print(f"[Groq search] {ultimo_error}")
+                break
 
-        texto = resp.json()["choices"][0]["message"]["content"].strip()
-        if not texto:
-            return False
+            if resp.status_code == 429:
+                ultimo_error = "HTTP 429: se alcanzó el límite temporal de solicitudes."
+                _rotar_groq("429")
+                time.sleep(1)
+                continue
+            if resp.status_code == 401:
+                ultimo_error = "HTTP 401: Groq rechazó la clave API."
+                _rotar_groq("401")
+                continue
+            if resp.status_code in (400, 403, 404, 413, 422):
+                try:
+                    error_data = resp.json().get("error", {})
+                    detalle = error_data.get("message") or error_data.get("failed_generation") or ""
+                except (ValueError, AttributeError, TypeError):
+                    detalle = ""
+                detalle = re.sub(r"(?i)(bearer\s+)[^\s,;]+", r"\1[oculto]", str(detalle))
+                detalle = re.sub(r"https?://\S+", "[enlace omitido]", detalle).strip()[:360]
+                explicaciones = {
+                    400: "Groq rechazó los parámetros o la herramienta de búsqueda.",
+                    403: "Groq denegó el acceso al modelo o a la herramienta con esta clave/proyecto.",
+                    404: "El modelo o la ruta solicitada no está disponible.",
+                    413: "La solicitud es demasiado grande para el proveedor.",
+                    422: "Groq no pudo procesar los parámetros de la búsqueda.",
+                }
+                ultimo_error = f"HTTP {resp.status_code}: {explicaciones.get(resp.status_code, 'Groq rechazó esta solicitud.')}"
+                if detalle:
+                    ultimo_error += f" Detalle: {detalle}"
+                print(f"[Groq search] Modelo/herramienta {modelo} HTTP {resp.status_code}: {resp.text[:300]}")
+                break
+            if resp.status_code != 200:
+                ultimo_error = f"HTTP {resp.status_code}: respuesta inesperada del proveedor."
+                print(f"[Groq search] {ultimo_error} {resp.text[:300]}")
+                break
 
-        html = _markdown(texto)
-        _bridge_html(_burbuja_jarvis(html))
-        _bridge_scroll()
-        _log_historial_jarvis(html)
+            try:
+                texto = resp.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+            except (ValueError, IndexError, AttributeError, TypeError) as exc:
+                ultimo_error = f"Respuesta inesperada: {type(exc).__name__}."
+                print(f"[Groq search] {ultimo_error}")
+                break
+            if not texto:
+                ultimo_error = "HTTP 200: Groq aceptó la solicitud, pero devolvió una respuesta vacía."
+                break
 
-        texto_voz = _limpiar(html)
-        if texto_voz:
-            _cola_voz().put(texto_voz)
-        return True
+            texto = _asegurar_respuesta_idioma(texto, pregunta)
 
+            html = _markdown(texto)
+            _bridge_html(_burbuja_jarvis(html))
+            _bridge_scroll()
+            _log_historial_jarvis(html)
+
+            texto_voz = _limpiar(html)
+            if texto_voz:
+                _cola_voz().put(texto_voz)
+            return True
+
+    mensaje_error = "No pude completar la búsqueda web con Groq."
+    if ultimo_error:
+        mensaje_error += f" {ultimo_error}"
+    else:
+        mensaje_error += " Comprueba la conexión y que el proyecto tenga habilitado un modelo compatible con búsqueda web."
+    _bridge_html(_burbuja_jarvis(_html.escape(mensaje_error)))
+    _bridge_scroll()
+    _hablar(mensaje_error, chat_widget)
     return False
 
 
@@ -960,6 +1181,42 @@ def _traducir_con_google(texto: str, idioma_destino: str) -> str:
     except Exception as exc:
         print(f"[Google Translate] Error: {exc}")
         return ""
+
+
+def _traducir_con_groq(texto: str, origen: str, destino: str) -> str:
+    """Último respaldo de traducción cuando los endpoints de traducción limitan peticiones."""
+    keys_fn = _ctx.get("groq_keys")
+    keys = keys_fn() if callable(keys_fn) else []
+    if not keys:
+        return ""
+    for intento in range(min(2, len(keys) * 2)):
+        key_fn = _ctx.get("groq_key_activa")
+        key = key_fn() if callable(key_fn) else keys[intento % len(keys)]
+        try:
+            resp = requests.post(
+                _ctx.get("GROQ_BASE_URL", "https://api.groq.com/openai/v1/chat/completions"),
+                headers={"Authorization": f"Bearer {key}", "Content-Type": "application/json"},
+                json={
+                    "model": _ctx.get("GROQ_MODEL", "openai/gpt-oss-20b"),
+                    "messages": [
+                        {"role": "system", "content": f"Traduce fielmente del idioma {origen or 'detectado automáticamente'} al idioma {destino}. Conserva el formato. Responde únicamente con la traducción, sin explicaciones."},
+                        {"role": "user", "content": texto[:10000]},
+                    ],
+                    "temperature": 0.1,
+                    "max_tokens": 2000,
+                }, timeout=25,
+            )
+            if resp.status_code in (401, 429):
+                rotate = _ctx.get("groq_rotar_key")
+                if callable(rotate):
+                    rotate(f"traducción {resp.status_code}")
+                continue
+            if resp.status_code == 200:
+                return resp.json().get("choices", [{}])[0].get("message", {}).get("content", "").strip()
+            print(f"[Groq Translation] HTTP {resp.status_code}: {resp.text[:200]}")
+        except requests.RequestException as exc:
+            print(f"[Groq Translation] Error: {exc}")
+    return ""
 
 
 def traducir_texto(texto: str, idioma_destino: str = "inglés", idioma_origen: str = "", chat_widget=None) -> bool:
@@ -1047,6 +1304,8 @@ def traducir_texto(texto: str, idioma_destino: str = "inglés", idioma_origen: s
                 continue
 
     traduccion_google = _traducir_con_google(texto, destino)
+    if not traduccion_google:
+        traduccion_google = _traducir_con_groq(texto, origen_label, destino_label)
     if traduccion_google:
         html_resultado = "<p><b>Traducción:</b></p><p>" + html.escape(traduccion_google).replace("\n", "<br>") + "</p>"
         _bridge_html(_burbuja_jarvis(html_resultado))
@@ -1075,29 +1334,30 @@ def ejecutar(accion: str, params: dict, chat_widget=None) -> bool:
 
     Devuelve True si procesó la acción.
     """
+    params = params if isinstance(params, dict) else {}
     if accion == "buscar_web":
         return buscar_web(
-            params.get("pregunta", ""),
-            params.get("termino_imagen"),
+            str(params.get("pregunta") or ""),
+            str(params.get("termino_imagen") or "") or None,
             chat_widget,
         )
     if accion == "noticias":
         obtener_noticias(
-            params.get("tema", ""),
-            params.get("categoria", ""),
+            str(params.get("tema") or ""),
+            str(params.get("categoria") or ""),
             chat_widget,
         )
         return True
     if accion == "clima":
-        obtener_clima(params.get("ciudad", "Bogotá"), chat_widget)
+        obtener_clima(str(params.get("ciudad") or "Bogotá"), chat_widget, str(params.get("dia") or "hoy"))
         return True
     if accion == "calcular":
-        return calcular_expresion(params.get("expresion", ""), chat_widget)
+        return calcular_expresion(str(params.get("expresion") or ""), chat_widget)
     if accion == "traducir":
         return traducir_texto(
-            params.get("texto", ""),
-            params.get("idioma_destino", "inglés"),
-            params.get("idioma_origen", ""),
+            str(params.get("texto") or ""),
+            str(params.get("idioma_destino") or "inglés"),
+            str(params.get("idioma_origen") or ""),
             chat_widget,
         )
 

@@ -19,7 +19,6 @@ DEFAULT_PROVIDER_ORDER = [
     "anthropic",
     "mistral",
     "deepseek",
-    "ollama",
 ]
 
 
@@ -62,7 +61,23 @@ def _sanitize_provider_models(provider_name: str, models: Optional[Iterable[str]
     } if provider_name == "gemini" else {}
     for model in list(models or []):
         value = str(model or "").strip()
+        if provider_name == "gemini":
+            # The Gemini REST API requires a model ID, never its display label
+            # (for example, "Gemini 2 Flash" or "Deep Research Pro Preview").
+            value = re.sub(r"^models/", "", value, flags=re.I)
+            value = aliases.get(value.lower(), value).lower()
+            if not re.fullmatch(r"(?:gemini|gemma)-[a-z0-9][a-z0-9._-]*", value, re.I):
+                continue
         value = aliases.get(value.lower(), value)
+        # /models también incluye reconocimiento de voz, filtros y modelos
+        # auxiliares que aceptan la API pero no generan respuestas de chat.
+        model_id = value.lower()
+        if any(term in model_id for term in (
+            "whisper", "prompt-guard", "safeguard", "moderation", "embedding",
+            "transcription", "speech-to-text", "text-to-speech", "-tts", "-image",
+            "-live", "deep-research", "computer-use", "robotics", "veo-", "lyria",
+        )):
+            continue
         if not value or value in seen:
             continue
         cleaned.append(value)
@@ -85,7 +100,6 @@ def normalize_provider_url(base_url: str, provider_type: str = "openai_compatibl
         "claude": "https://api.anthropic.com/v1/messages",
         "mistral": "https://api.mistral.ai/v1/chat/completions",
         "deepseek": "https://api.deepseek.com/v1/chat/completions",
-        "ollama": "http://localhost:11434/api/chat",
     }
     if alias in named_endpoints:
         return named_endpoints[alias]
@@ -183,16 +197,6 @@ def _default_provider_map() -> Dict[str, Dict[str, Any]]:
             "priority": 60,
             "type": "openai_compatible",
         },
-        "ollama": {
-            "enabled": False,
-            "api_key": "",
-            "api_keys": [],
-            "model": "llama3.1",
-            "models": ["llama3.1", "qwen2.5:7b", "mistral:7b", "phi3:mini"],
-            "base_url": "http://localhost:11434/api/chat",
-            "priority": 999,
-            "type": "ollama",
-        },
     }
 
 
@@ -249,16 +253,11 @@ class AIProviderManager:
                 provider_cfg["api_key"] = ""
             current_model = str(provider_cfg.get("model") or "").strip()
             if provider_name == "gemini":
-                current_model = {
-                    "gemini 2.5 flash": "gemini-2.5-flash",
-                    "gemini 2.5 pro": "gemini-2.5-pro",
-                    "gemini 2.0 flash": "gemini-3.8-flash",
-                    "gemini-2.0-flash": "gemini-3.8-flash",
-                    "gemini 2.0 flash lite": "gemini-3.5-flash-lite",
-                    "gemini-2.0-flash-lite": "gemini-3.5-flash-lite",
-                }.get(current_model.lower(), current_model)
+                normalized_current = _sanitize_provider_models(provider_name, [current_model])
+                current_model = normalized_current[0] if normalized_current else ""
             if current_model and cleaned_models and current_model not in cleaned_models:
-                provider_cfg["model"] = ""
+                current_model = ""
+            provider_cfg["model"] = current_model
         return config
 
     def load(self) -> Dict[str, Any]:
@@ -284,9 +283,19 @@ class AIProviderManager:
                 if isinstance(value, dict):
                     merged[key] = dict(value)
 
+            # Retire legacy Ollama settings while keeping every cloud/custom
+            # provider and its API keys intact.
+            merged = {
+                name: cfg for name, cfg in merged.items()
+                if name.lower() != "ollama" and str(cfg.get("type") or "").lower() != "ollama"
+            }
+            selected_provider = str(loaded.get("selected_provider", "") or "")
+            if selected_provider.lower() == "ollama":
+                selected_provider = ""
+
             self.config = {
                 "version": int(loaded.get("version", 1)),
-                "selected_provider": loaded.get("selected_provider", ""),
+                "selected_provider": selected_provider,
                 "providers": merged,
             }
             self.config = self._sanitize_loaded_config(self.config)
@@ -446,49 +455,64 @@ class AIProviderManager:
             models = [str(provider.get("model"))]
         return models
 
-    def discover_provider_models(self, provider_name: str, timeout: int = 8) -> List[str]:
-        """Obtiene IDs desde ``/models`` cuando el endpoint del proveedor lo permite."""
+    def discover_provider_models(self, provider_name: str, timeout: int = 8, guardar: bool = True) -> List[str]:
+        """Obtiene IDs desde ``/models``; ``guardar=False`` solo consulta la lista."""
         if requests is None:
             return []
         provider = self.get_provider(provider_name)
-        if str(provider.get("type") or "openai_compatible").lower() != "openai_compatible":
-            return []
-        base_url = normalize_provider_url(provider.get("base_url", ""), "openai_compatible")
-        if not base_url:
-            return []
-        models_url = base_url.removesuffix("/chat/completions").rstrip("/") + "/models"
-        headers = {}
         api_key = self.get_provider_api_key(provider_name)
-        if api_key:
-            headers["Authorization"] = f"Bearer {api_key}"
+        provider_type = str(provider.get("type") or "openai_compatible").lower()
+        if not api_key:
+            return []
+        if provider_type == "gemini":
+            models_url = normalize_provider_url(provider.get("base_url", ""), "gemini").rstrip("/")
+            headers = {}
+            request_params = {"key": api_key}
+        elif provider_type == "openai_compatible":
+            base_url = normalize_provider_url(provider.get("base_url", ""), "openai_compatible")
+            if not base_url:
+                return []
+            models_url = base_url.removesuffix("/chat/completions").rstrip("/") + "/models"
+            headers = {"Authorization": f"Bearer {api_key}"}
+            request_params = {}
+        else:
+            return []
         try:
-            response = requests.get(models_url, headers=headers, timeout=timeout)
+            response = requests.get(models_url, headers=headers, params=request_params, timeout=timeout)
             response.raise_for_status()
             data = response.json()
-            discovered = [
-                str(item.get("id", "")).strip()
-                for item in (data.get("data") or [])
-                if isinstance(item, dict) and str(item.get("id", "")).strip()
-            ]
+            if provider_type == "gemini":
+                discovered = [
+                    str(item.get("name", "")).removeprefix("models/").strip()
+                    for item in (data.get("models") or [])
+                    if isinstance(item, dict)
+                    and "generateContent" in (item.get("supportedGenerationMethods") or [])
+                    and str(item.get("name", "")).strip()
+                ]
+            else:
+                discovered = [
+                    str(item.get("id", "")).strip()
+                    for item in (data.get("data") or [])
+                    if isinstance(item, dict) and str(item.get("id", "")).strip()
+                ]
+            discovered = _sanitize_provider_models(provider_name, discovered)
         except Exception:
             return []
         if not discovered:
             return []
-        self.set_provider_models(provider_name, discovered)
+        if guardar:
+            self.set_provider_models(provider_name, discovered)
         return discovered
 
     def _provider_model_candidates(self, provider_name: str, provider: Optional[Dict[str, Any]] = None) -> List[str]:
         provider = provider or self.get_provider(provider_name)
         models = list(provider.get("models") or []) if isinstance(provider.get("models"), list) else []
         current_model = str(provider.get("model") or "").strip()
-        # Primero respeta la elección del usuario; si el endpoint rechaza ese ID,
-        # conserva el comportamiento tolerante y prueba los modelos de la misma key.
-        candidates = [current_model] if current_model else []
-        candidates.extend(str(model).strip() for model in models if str(model).strip())
-        candidates = list(dict.fromkeys(candidates))
-        if candidates:
-            return candidates
-        return [str(model).strip() for model in models if str(model).strip()]
+        # El selector representa un modelo concreto: no cambiarlo en silencio
+        # si falla. Para usar otro, la persona puede seleccionarlo en la UI.
+        if current_model:
+            return [current_model]
+        return [str(model).strip() for model in models if str(model).strip()][:1]
 
     def set_provider_model(self, provider_name: str, model_name: str) -> Dict[str, Any]:
         provider = self.config.setdefault("providers", {}).setdefault(provider_name, {})
@@ -561,8 +585,12 @@ class AIProviderManager:
                     {"role": "system", "content": system_prompt or "Eres Jarvis, un asistente útil."},
                     {"role": "user", "content": prompt},
                 ],
-                "temperature": 0.4,
             }
+            if re.match(r"^(?:o[134](?:-|$)|gpt-5)", model_name, re.I):
+                payload["max_completion_tokens"] = 2048
+            else:
+                payload["temperature"] = 0.4
+                payload["max_tokens"] = 2048
             headers = {
                 "Authorization": f"Bearer {api_key}",
                 "Content-Type": "application/json",
@@ -570,15 +598,18 @@ class AIProviderManager:
             try:
                 response = requests.post(base_url, headers=headers, json=payload, timeout=timeout)
                 if response.status_code in (401, 403):
-                    raise PermissionError(f"{provider_name} key inválida o sin permisos ({response.status_code})")
+                    body = _redact_sensitive_text(response.text[:400].replace("\n", " "))
+                    if response.status_code == 401:
+                        raise PermissionError(f"{provider_name} rechazó la clave API (401): {body}")
+                    raise PermissionError(f"{provider_name} denegó el acceso al modelo {model_name} (403): {body}")
                 if response.status_code == 404:
                     last_exc = RuntimeError(f"{provider_name} no soporta el modelo {model_name} (404)")
-                    continue
+                    break
                 if response.status_code >= 400:
                     body = _redact_sensitive_text(response.text[:400].replace("\n", " "))
                     print(f"[AI Provider] {provider_name} HTTP {response.status_code} con modelo {model_name}: {body}")
                     last_exc = RuntimeError(f"{provider_name} devolvió HTTP {response.status_code} para {model_name}: {body}")
-                    continue
+                    break
                 response.raise_for_status()
                 data = response.json()
                 choices = data.get("choices") or []
@@ -607,14 +638,18 @@ class AIProviderManager:
             payload = {
                 "contents": [{"parts": [{"text": prompt}]}],
                 "system_instruction": {"parts": [{"text": system_prompt or "Eres Jarvis."}]},
-                "generationConfig": {"temperature": 0.4, "maxOutputTokens": 1500},
+                "generationConfig": {"temperature": 0.4, "maxOutputTokens": 8192},
             }
             try:
                 response = requests.post(url, json=payload, timeout=timeout)
                 if response.status_code in (401, 403):
-                    raise PermissionError(f"{provider_name} key inválida o sin permisos ({response.status_code})")
+                    body = _redact_sensitive_text(response.text[:400].replace("\n", " "))
+                    if response.status_code == 401:
+                        raise PermissionError(f"{provider_name} rechazó la clave API (401): {body}")
+                    raise PermissionError(f"{provider_name} denegó el acceso al modelo {model_name} (403): {body}")
                 if response.status_code == 404:
-                    last_exc = RuntimeError(f"{provider_name} no soporta el modelo {model_name} (404)")
+                    body = _redact_sensitive_text(response.text[:400].replace("\n", " "))
+                    last_exc = RuntimeError(f"{provider_name} no encontró el modelo {model_name} (404): {body}")
                     continue
                 if response.status_code >= 400:
                     body = _redact_sensitive_text(response.text[:400].replace("\n", " "))
@@ -652,7 +687,7 @@ class AIProviderManager:
         for model_name in self._provider_model_candidates(provider_name, provider):
             payload = {
                 "model": model_name,
-                "max_tokens": 1500,
+                "max_tokens": 8192,
                 "system": system_prompt or "Eres Jarvis, un asistente útil.",
                 "messages": [{"role": "user", "content": prompt}],
             }
@@ -664,7 +699,10 @@ class AIProviderManager:
             try:
                 response = requests.post(provider.get("base_url", "https://api.anthropic.com/v1/messages"), headers=headers, json=payload, timeout=timeout)
                 if response.status_code in (401, 403):
-                    raise PermissionError(f"{provider_name} key inválida o sin permisos ({response.status_code})")
+                    body = _redact_sensitive_text(response.text[:400].replace("\n", " "))
+                    if response.status_code == 401:
+                        raise PermissionError(f"{provider_name} rechazó la clave API (401): {body}")
+                    raise PermissionError(f"{provider_name} denegó el acceso al modelo {model_name} (403): {body}")
                 if response.status_code == 404:
                     last_exc = RuntimeError(f"{provider_name} no soporta el modelo {model_name} (404)")
                     continue
@@ -683,28 +721,6 @@ class AIProviderManager:
             raise last_exc
         raise RuntimeError(f"No se pudo obtener respuesta de {provider_name}")
 
-    def _call_ollama(self, provider_name: str, prompt: str, system_prompt: Optional[str] = None, timeout: int = 30, api_key: Optional[str] = None) -> Optional[str]:
-        if requests is None:
-            return None
-
-        provider = self.get_provider(provider_name)
-        model = provider.get("model", "llama3.1")
-        url = provider.get("base_url", "http://localhost:11434/api/chat")
-        payload = {
-            "model": model,
-            "messages": [
-                {"role": "system", "content": system_prompt or "Eres Jarvis."},
-                {"role": "user", "content": prompt},
-            ],
-            "stream": False,
-        }
-        response = requests.post(url, json=payload, timeout=timeout)
-        response.raise_for_status()
-        data = response.json()
-        message = (data.get("message") or {}).get("content")
-        self.last_model_name = str(model)
-        return message
-
     def _invoke_provider(self, provider_name: str, prompt: str, system_prompt: Optional[str] = None, timeout: int = 30) -> Optional[str]:
         provider = self.get_provider(provider_name)
         provider_type = str(provider.get("type") or "openai_compatible").lower()
@@ -717,8 +733,6 @@ class AIProviderManager:
                     result = self._call_gemini(provider_name, prompt, system_prompt=system_prompt, timeout=timeout, api_key=api_key)
                 elif provider_type == "anthropic":
                     result = self._call_anthropic(provider_name, prompt, system_prompt=system_prompt, timeout=timeout, api_key=api_key)
-                elif provider_type == "ollama":
-                    result = self._call_ollama(provider_name, prompt, system_prompt=system_prompt, timeout=timeout, api_key=api_key)
                 else:
                     result = self._call_openai_compatible(provider_name, prompt, system_prompt=system_prompt, timeout=timeout, api_key=api_key)
                 if result and str(result).strip():
@@ -746,6 +760,24 @@ class AIProviderManager:
             except Exception as exc:  # pragma: no cover - robust fallback
                 print(f"[AI Provider] {provider_name} falló: {_redact_sensitive_text(exc)}")
         raise RuntimeError("No hay ningún proveedor activo y con API key disponible.")
+
+    def generate_with_provider(self, provider_name: str, prompt: str, system_prompt: Optional[str] = None, timeout: int = 30) -> str:
+        """Invoca un proveedor concreto configurado por el usuario."""
+        provider_name = str(provider_name or "").strip().lower()
+        if not provider_name:
+            raise RuntimeError("No se especificó un proveedor de IA.")
+        provider = self.config.setdefault("providers", {}).get(provider_name)
+        if not isinstance(provider, dict) and provider_name in _default_provider_map():
+            provider = dict(_default_provider_map()[provider_name])
+            self.config["providers"][provider_name] = provider
+        if not isinstance(provider, dict):
+            raise RuntimeError(f"El proveedor {provider_name} no está configurado.")
+        self.last_model_name = None
+        result = self._invoke_provider(provider_name, prompt, system_prompt=system_prompt, timeout=timeout)
+        if not result or not str(result).strip():
+            raise RuntimeError(f"El proveedor {provider_name} no devolvió una respuesta.")
+        self.last_provider_name = provider_name
+        return str(result).strip()
 
     def normalized_config(self) -> Dict[str, Any]:
         return {

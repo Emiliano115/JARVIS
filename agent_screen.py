@@ -8,6 +8,8 @@ import re
 import threading
 import time
 import urllib.request
+import unicodedata
+import shutil
 
 try:
     from PIL import ImageGrab
@@ -25,10 +27,15 @@ except ImportError:
 
 try:
     import pytesseract
-    if os.path.exists(r"C:\Program Files\Tesseract-OCR\tesseract.exe"):
-        pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files\Tesseract-OCR\tesseract.exe"
-    elif os.path.exists(r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"):
-        pytesseract.pytesseract.tesseract_cmd = r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe"
+    candidatos_tesseract = [
+        os.environ.get("TESSERACT_CMD", ""), shutil.which("tesseract") or "",
+        r"C:\Program Files\Tesseract-OCR\tesseract.exe",
+        r"C:\Program Files (x86)\Tesseract-OCR\tesseract.exe",
+        os.path.join(os.environ.get("LOCALAPPDATA", ""), "Programs", "Tesseract-OCR", "tesseract.exe"),
+    ]
+    ruta_tesseract = next((p for p in candidatos_tesseract if p and os.path.isfile(p)), "")
+    if ruta_tesseract:
+        pytesseract.pytesseract.tesseract_cmd = ruta_tesseract
     HAS_OCR = True
 except ImportError:
     pytesseract = None
@@ -94,6 +101,10 @@ _cam_gestos = None
 _clap_thread = None
 _clap_count = 0
 _ultimo_clap = 0.0
+_ultimo_clap_audio = 0.0
+_clap_audio_lock = threading.Lock()
+_clap_primera_ts = 0.0
+_clap_ultimo_evento_ts = 0.0
 _ultimo_distancia_manos = None
 _gestos_pointer = {"x": 0, "y": 0}
 _gestos_drag_active = False
@@ -189,7 +200,25 @@ def capturar_pantalla() -> object | None:
     try:
         return ImageGrab.grab(all_screens=True)
     except Exception as exc:
-        print(f"[Screen] No se pudo capturar la pantalla: {exc}")
+        # En algunos controladores de Windows falla la captura de todos los
+        # monitores aunque la pantalla principal sí sea accesible.
+        try:
+            imagen = ImageGrab.grab()
+            if imagen is not None:
+                return imagen
+        except Exception as exc_secundario:
+            print(f"[Screen] ImageGrab falló (todos los monitores y principal): {exc}; {exc_secundario}")
+        # MSS usa una ruta distinta de captura y suele funcionar en equipos
+        # donde GDI/Pillow no puede capturar el escritorio extendido.
+        try:
+            import mss
+            from PIL import Image
+            with mss.mss() as capturador:
+                monitor = capturador.monitors[0]
+                captura = capturador.grab(monitor)
+                return Image.frombytes("RGB", captura.size, captura.rgb)
+        except Exception as exc_mss:
+            print(f"[Screen] MSS tampoco pudo capturar la pantalla: {exc_mss}")
         return None
 
 
@@ -209,8 +238,41 @@ def obtener_ultimo_frame():
         return _latest_frame.copy() if _latest_frame is not None else None
 
 
-def leer_texto_pantalla(imagen=None, max_caracteres=None, max_lineas=None) -> str:
-    """Extrae texto visible localmente conservando bloques, columnas y párrafos."""
+def limpiar_texto_ocr(texto: str) -> str:
+    """Quita URLs y ruido típico de pestañas/barra del navegador del OCR."""
+    resultado = []
+    for linea in str(texto or "").splitlines():
+        # Las direcciones web casi siempre vienen de la barra del navegador y
+        # no ayudan a explicar el contenido de la página.
+        if re.search(r"(?:https?://|www\.|\b[\w-]+\.(?:com|org|net|edu|gov|io|co)(?:/|\b))", linea, re.I):
+            continue
+        partes = re.split(r"\s*[|¦]\s*", linea)
+        partes_limpias = []
+        for parte in partes:
+            parte = re.sub(r"^\s*[@€•·>+|]+\s*", "", parte)
+            # Los números de episodio de listas como 16x24 suelen preceder el
+            # título; la información útil es el nombre que viene después.
+            parte = re.sub(r"^\s*\d{1,2}\s*[x×]\s*\d{1,2}\s+", "", parte, flags=re.I)
+            parte = re.sub(r"\s+(?:x|×){1,3}\s*$", "", parte, flags=re.I)
+            parte = re.sub(r"\s*[+=>]+\s*$", "", parte).strip(" \t-–—")
+            plano = re.sub(r"[^a-z0-9]", "", quitar_tildes_local(parte.lower()))
+            if len(plano) < 3 or re.search(r"\b(?:ask\s+gemini|search\s+tabs|nueva\s+pestana|new\s+tab)\b", parte, re.I):
+                continue
+            partes_limpias.append(parte)
+        if partes_limpias:
+            resultado.append(" · ".join(partes_limpias))
+    return "\n".join(resultado)
+
+
+def quitar_tildes_local(texto: str) -> str:
+    return "".join(
+        c for c in unicodedata.normalize("NFD", str(texto or ""))
+        if unicodedata.category(c) != "Mn"
+    )
+
+
+def leer_texto_pantalla(imagen=None, max_caracteres=None, max_lineas=None, limpiar_ruido=True) -> str:
+    """Extrae OCR en orden visual; puede conservar controles y enlaces para accesibilidad."""
     if not HAS_OCR:
         return ""
     imagen = imagen or capturar_pantalla()
@@ -233,7 +295,7 @@ def leer_texto_pantalla(imagen=None, max_caracteres=None, max_lineas=None) -> st
             confianza = float(datos.get("conf", [0] * total)[indice])
         except (TypeError, ValueError):
             confianza = 0
-        if not palabra or confianza < 25:
+        if not palabra or confianza < (25 if limpiar_ruido else 5):
             continue
         clave_bloque = int(datos.get("block_num", [0] * total)[indice])
         clave_parrafo = int(datos.get("par_num", [0] * total)[indice])
@@ -263,16 +325,18 @@ def leer_texto_pantalla(imagen=None, max_caracteres=None, max_lineas=None) -> st
     lineas_ocr = []
     vistos = set()
     for (numero_bloque, numero_parrafo, _), linea in bloques.items():
-        limpio = " ".join(linea["palabras"])
-        if re.fullmatch(r"(?:https?://|www\.)\S+", limpio, re.IGNORECASE):
+        limpio = " ".join(linea["palabras"]).strip()
+        if limpiar_ruido:
+            limpio = limpiar_texto_ocr(limpio)
+        if not limpio:
             continue
-        limpio = re.sub(r"https?://\S+|www\.\S+", "[enlace]", limpio, flags=re.IGNORECASE)
-        if len(re.sub(r"[^\wáéíóúüñ]", "", limpio, flags=re.IGNORECASE)) < 3:
+        if limpiar_ruido and len(re.sub(r"[^\wáéíóúüñ]", "", limpio, flags=re.IGNORECASE)) < 3:
             continue
         clave = limpio.casefold()
-        if clave in vistos:
-            continue
-        vistos.add(clave)
+        if limpiar_ruido:
+            if clave in vistos:
+                continue
+            vistos.add(clave)
         lineas_ocr.append({
             "texto": limpio,
             "x": linea["x"],
@@ -321,6 +385,8 @@ def leer_texto_pantalla(imagen=None, max_caracteres=None, max_lineas=None) -> st
             bloques_texto.append(" ".join(actual))
 
     resultado = "\n\n".join(bloques_texto)
+    if limpiar_ruido:
+        resultado = limpiar_texto_ocr(resultado)
     if max_lineas is not None:
         resultado = "\n".join(resultado.splitlines()[:max_lineas])
     if max_caracteres is not None:
@@ -390,16 +456,76 @@ def _buscar_objetivo_en_pantalla(objetivo: str) -> tuple[int, int] | None:
     except Exception:
         return None
     try:
-        imagen = ImageGrab.grab(all_screens=True)
-        datos = pytesseract.image_to_data(imagen, output_type=Output.DICT, lang='spa+eng')
-        objetivo_norm = objetivo.lower().strip()
+        try:
+            from thefuzz import fuzz
+            comparar = fuzz.ratio
+        except Exception:
+            from difflib import SequenceMatcher
+            comparar = lambda a, b: int(SequenceMatcher(None, a, b).ratio() * 100)
+        from PIL import ImageOps
+        imagen = capturar_pantalla()
+        if imagen is None:
+            return None
+        escala = 1.5
+        ancho, alto = imagen.size
+        procesada = ImageOps.grayscale(imagen).resize((int(ancho * escala), int(alto * escala)))
+        datos = pytesseract.image_to_data(
+            procesada, output_type=Output.DICT, lang='spa+eng', config='--psm 11'
+        )
+        def normalizar(s):
+            plano = ''.join(
+                c for c in unicodedata.normalize('NFD', str(s).lower())
+                if unicodedata.category(c) != 'Mn'
+            )
+            return re.sub(r'[^\w]+', ' ', plano).strip()
+        objetivo_norm = normalizar(objetivo)
+        palabras_objetivo = objetivo_norm.split()
+        lineas = {}
         for idx, texto in enumerate(datos.get('text', [])):
-            if not texto:
+            palabra = normalizar(texto)
+            try:
+                confianza = float(datos.get('conf', [0] * len(datos.get('text', [])))[idx])
+            except (TypeError, ValueError):
+                confianza = 0
+            if not palabra or confianza < 5:
                 continue
-            if objetivo_norm in texto.lower():
-                x = int(datos['left'][idx] + datos['width'][idx] / 2)
-                y = int(datos['top'][idx] + datos['height'][idx] / 2)
-                return x, y
+            key = (datos['block_num'][idx], datos['par_num'][idx], datos['line_num'][idx])
+            lineas.setdefault(key, []).append(idx)
+
+        mejor = None
+        mejor_score = 0
+        for indices in lineas.values():
+            linea = ' '.join(normalizar(datos['text'][i]) for i in indices)
+            palabras_linea = linea.split()
+            if objetivo_norm in linea:
+                score = 100
+            elif len(palabras_objetivo) == 1:
+                score = max((comparar(objetivo_norm, palabra) for palabra in palabras_linea), default=0)
+            else:
+                try:
+                    score = fuzz.token_set_ratio(objetivo_norm, linea)
+                except Exception:
+                    score = comparar(" ".join(sorted(set(palabras_objetivo))), " ".join(sorted(set(palabras_linea))))
+            umbral = 72 if len(palabras_objetivo) == 1 else 78
+            if score < umbral or score <= mejor_score:
+                continue
+            candidatos = [i for i in indices if any(t in normalizar(datos['text'][i]) for t in palabras_objetivo)]
+            if not candidatos:
+                candidatos = indices
+            left = min(datos['left'][i] for i in candidatos)
+            top = min(datos['top'][i] for i in candidatos)
+            right = max(datos['left'][i] + datos['width'][i] for i in candidatos)
+            bottom = max(datos['top'][i] + datos['height'][i] for i in candidatos)
+            try:
+                ancho_ui, alto_ui = pyautogui.size()
+            except Exception:
+                ancho_ui, alto_ui = ancho, alto
+            ratio_x = (ancho_ui / ancho) if ancho else 1.0
+            ratio_y = (alto_ui / alto) if alto else 1.0
+            mejor = (int((left + right) / (2 * escala) * ratio_x), int((top + bottom) / (2 * escala) * ratio_y))
+            mejor_score = score
+        if mejor is not None:
+            return mejor
     except Exception as exc:
         print(f"[Screen] OCR objetivo falló: {exc}")
     return None
@@ -417,9 +543,10 @@ def hacer_click(x: int | None = None, y: int | None = None, boton: str = "left",
                     _notify(f"Objetivo '{objetivo}' localizado en {x}, {y}")
                 else:
                     _say(
-                        f"No encontré '{objetivo}' en pantalla. Haré clic donde esté el cursor.",
+                        f"No encontré '{objetivo}' en pantalla. No hice clic; revisa que Tesseract OCR esté instalado y el texto visible.",
                         chat_widget,
                     )
+                    return
             if x is None or y is None:
                 pt = pyautogui.position()
                 x = pt.x
@@ -449,22 +576,6 @@ def escribir(texto: str, intervalo: float = 0.02, chat_widget=None):
         _say("No pude escribir en la ventana activa.", chat_widget)
 
 
-def pulsar_tecla(tecla: str, chat_widget=None):
-    if not _require_control(chat_widget):
-        return
-    tecla = str(tecla or "").strip().lower()
-    permitidas = {"enter", "esc", "escape", "tab", "space", "backspace", "delete", "home", "end", "up", "down", "left", "right", "f1", "f2", "f3", "f4", "f5", "f6", "f7", "f8", "f9", "f10", "f11", "f12", "ctrl", "alt", "shift"}
-    if len(tecla) != 1 and tecla not in permitidas:
-        _say("Esa tecla no está permitida por el control de pantalla.", chat_widget)
-        return
-    try:
-        pyautogui.press("esc" if tecla == "escape" else tecla)
-        _notify(f"Tecla: {tecla}")
-    except Exception as exc:
-        print(f"[Screen] Tecla falló: {exc}")
-        _say("No pude pulsar esa tecla.", chat_widget)
-
-
 def desplazarse(cantidad: int, x: int | None = None, y: int | None = None, chat_widget=None):
     if not _require_control(chat_widget):
         return
@@ -484,11 +595,17 @@ def hacer_zoom(cantidad: int = 120, chat_widget=None):
     if not _require_control(chat_widget):
         return
     try:
-        pyautogui.keyDown('ctrl')
-        try:
-            pyautogui.scroll(int(cantidad))
-        finally:
-            pyautogui.keyUp('ctrl')
+        if int(cantidad) == 0:
+            pyautogui.hotkey('ctrl', '0')
+            _notify("Zoom restablecido")
+            return
+        pasos = max(1, min(10, round(abs(int(cantidad)) / 120)))
+        tecla = "=" if int(cantidad) > 0 else "-"
+        # Ctrl + rueda depende de la aplicación y del driver del ratón.
+        # Los atajos Ctrl+= / Ctrl+- son el control de zoom de Chrome, Edge,
+        # Firefox y la mayoría de visores con zoom.
+        for _ in range(pasos):
+            pyautogui.hotkey("ctrl", tecla)
         _notify(f"Zoom ejecutado: {int(cantidad)}")
     except Exception as exc:
         print(f"[Screen] Zoom falló: {exc}")
@@ -745,12 +862,14 @@ def _hilo_gestos():
                         if _gestos_last_zoom is not None:
                             diff = dist - _gestos_last_zoom
                             ahora = time.monotonic()
-                            if abs(diff) > 35 and (ahora - _gestos_last_zoom_ts) > 0.5:
-                                if diff > 0:
-                                    try: pyautogui.hotkey('ctrl', '+')
-                                    except Exception: pass
-                                else:
-                                    try: pyautogui.hotkey('ctrl', '-')
+                            if abs(diff) > 10 and (ahora - _gestos_last_zoom_ts) > 0.2:
+                                try:
+                                    pyautogui.keyDown('ctrl')
+                                    pyautogui.scroll(1 if diff > 0 else -1)
+                                except Exception:
+                                    pass
+                                finally:
+                                    try: pyautogui.keyUp('ctrl')
                                     except Exception: pass
                                 _gestos_last_zoom_ts = ahora
                         _gestos_last_zoom = dist
@@ -956,6 +1075,57 @@ def _toggle_clap_listener():
     _clap_thread.start()
 
 
+def procesar_audio_aplausos(audio, samplerate: int = 16000):
+    """Toggle gestures only after a deliberate pair of sharp claps."""
+    global _clap_count, _ultimo_clap_audio, _clap_primera_ts, _clap_ultimo_evento_ts
+    if not HAS_NUMPY or audio is None:
+        return
+    try:
+        datos = np.asarray(audio, dtype="float32").reshape(-1)
+        tamaño = max(1, int(samplerate * 0.03))
+        energias = []
+        picos = []
+        for inicio in range(0, len(datos), tamaño):
+            bloque = datos[inicio:inicio + tamaño]
+            if len(bloque) < tamaño // 2:
+                break
+            energias.append(float(np.sqrt(np.mean(np.square(bloque)))))
+            picos.append(float(np.max(np.abs(bloque))))
+        inicio_audio = time.monotonic() - (len(datos) / max(1, samplerate))
+        for indice in range(2, len(energias) - 2):
+            rms = energias[indice]
+            entorno = energias[max(0, indice - 5):indice] + energias[indice + 1:indice + 6]
+            base = float(np.median(entorno)) if entorno else 0.003
+            pico = picos[indice]
+            # A 30 ms el golpe de una palmada queda menos diluido. Se compara
+            # con el nivel local para adaptarse al volumen de cada micrófono.
+            if rms < max(0.035, base * 4.0) or pico < 0.12 or pico / max(rms, 1e-5) < 2.0:
+                continue
+            ahora = inicio_audio + ((indice + 0.5) * tamaño / max(1, samplerate))
+            with _clap_audio_lock:
+                # Ignore adjacent frames belonging to the same acoustic impulse.
+                if ahora - _clap_ultimo_evento_ts < 0.14:
+                    continue
+                _clap_ultimo_evento_ts = ahora
+                if ahora - _clap_primera_ts > 0.85:
+                    _clap_primera_ts = ahora
+                    _clap_count = 1
+                    continue
+                if 0.12 <= ahora - _clap_primera_ts <= 0.85 and ahora - _ultimo_clap_audio >= 1.4:
+                    _clap_primera_ts = 0.0
+                    _clap_count = 0
+                    _ultimo_clap_audio = ahora
+                    if not _modo_gestos_activo:
+                        activar_modo_gestos()
+                    else:
+                        desactivar_modo_gestos()
+                else:
+                    _clap_primera_ts = ahora
+                    _clap_count = 1
+    except Exception as exc:
+        print(f"[Screen] Detector de aplausos: {exc}")
+
+
 def calibrar_gestos(duracion: int = 6, chat_widget=None):
     """Calibracion simple: recoge distancias pulgar-indice y calcula un umbral absoluto.
     duracion: segundos a muestrear (recomendado 4..10)
@@ -1076,7 +1246,6 @@ def activar_modo_gestos(chat_widget=None):
     if not _manejar_gestos_por_camara(chat_widget):
         # _manejar_gestos_por_camara already explica la causa.
         return False
-    _toggle_clap_listener()
     _say("Estoy iniciando el modo de gestos; te avisaré cuando la cámara y la detección estén listas.", chat_widget)
     return True
 
@@ -1144,7 +1313,11 @@ def ejecutar(accion: str, params: dict, chat_widget=None):
     if accion == "desactivar_gestos":
         return desactivar_modo_gestos(chat_widget)
     if accion == "calibrar_gestos":
-        return calibrar_gestos(int(params.get('duracion', 6)), chat_widget)
+        try:
+            duracion = int(params.get("duracion", 6))
+        except (TypeError, ValueError, OverflowError):
+            duracion = 6
+        return calibrar_gestos(max(1, min(duracion, 30)), chat_widget)
     if accion == "recalibrar_gestos":
         return recalibrar_modo_gestos(chat_widget)
     if accion == "hacer_click":
@@ -1154,8 +1327,6 @@ def ejecutar(accion: str, params: dict, chat_widget=None):
         )
     if accion == "escribir":
         return escribir(params.get("texto", ""), params.get("intervalo", 0.02), chat_widget)
-    if accion == "pulsar_tecla":
-        return pulsar_tecla(params.get("tecla", ""), chat_widget)
     if accion == "desplazarse":
         return desplazarse(params.get("cantidad", -3), params.get("x"), params.get("y"), chat_widget)
     if accion == "hacer_zoom":

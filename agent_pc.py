@@ -319,19 +319,56 @@ def get_brightness() -> int:
             return b.CurrentBrightness
     except Exception:
         pass
+    try:
+        import subprocess
+        consulta = (
+            "$b=Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightness | "
+            "Select-Object -First 1 -ExpandProperty CurrentBrightness;"
+            "if($null -eq $b){exit 2}; [Console]::Write($b)"
+        )
+        resultado = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", consulta],
+            capture_output=True, text=True, timeout=6,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if resultado.returncode == 0:
+            return max(0, min(100, int(resultado.stdout.strip())))
+    except Exception:
+        pass
     return 50
 
 
 def set_brightness(valor: int, chat_widget=None):
-    w = _get_wmi()
-    if not w:
-        _hablar("Control de brillo no disponible en este equipo.", chat_widget)
-        return
     valor = max(0, min(100, valor))
+    w = _get_wmi()
     try:
-        for b in w.WmiMonitorBrightnessMethods():
-            b.WmiSetBrightness(valor, 0)
-        _hablar(f"Brillo ajustado a {valor} por ciento", chat_widget)
+        if w:
+            monitores = w.WmiMonitorBrightnessMethods()
+            for monitor in monitores:
+                monitor.WmiSetBrightness(valor, 0)
+            if monitores:
+                _hablar(f"Brillo ajustado a {valor} por ciento", chat_widget)
+                return
+        # Vía Win32/CIM como respaldo, sin depender del paquete Python wmi.
+        import subprocess
+        script = (
+            "$m=Get-CimInstance -Namespace root/WMI -ClassName WmiMonitorBrightnessMethods;"
+            "if(-not $m){exit 2};"
+            f"$m | ForEach-Object {{ Invoke-CimMethod -InputObject $_ -MethodName WmiSetBrightness "
+            f"-Arguments @{{Timeout=1;Brightness={valor}}} | Out-Null }}"
+        )
+        resultado = subprocess.run(
+            ["powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script],
+            capture_output=True, text=True, timeout=8,
+            creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0),
+        )
+        if resultado.returncode == 0:
+            _hablar(f"Brillo ajustado a {valor} por ciento", chat_widget)
+            return
+        if resultado.returncode == 2:
+            _hablar("Windows no expone control de brillo para este monitor. Si usas monitor externo, prueba sus controles físicos o el software del fabricante.", chat_widget)
+            return
+        raise RuntimeError(resultado.stderr.strip() or "Windows no pudo ajustar el brillo")
     except Exception as e:
         _hablar(f"No pude ajustar el brillo: {e}", chat_widget)
 
@@ -513,8 +550,9 @@ def abrir_app(nombre_usuario: str, chat_widget=None, pedir_confirmacion: bool = 
         return
 
     query_words = [w for w in re.sub(r"[^a-z0-9áéíóúñü\s]", " ", nombre_usuario).split() if len(w) > 2]
-    # Umbral más flexible para detectar apps: 60 en lugar de 70
-    min_seguro = 60
+    # Un parecido moderado no basta para lanzar una app: evita abrir Excel al
+    # pedir Vercel, o cualquier otro candidato irrelevante.
+    min_seguro = 86
 
     if explicit_web and best_web and best_web["score"] >= min_seguro:
         _ejecutar_app(best_web["data"]["nombre"], best_web["data"]["ruta"], chat_widget)
@@ -524,7 +562,8 @@ def abrir_app(nombre_usuario: str, chat_widget=None, pedir_confirmacion: bool = 
         return
 
     if (pedir_confirmacion and best_app and best_web
-            and best_app["score"] >= min_seguro and best_web["score"] >= min_seguro):
+            and best_app["score"] >= min_seguro and best_web["score"] >= min_seguro
+            and abs(best_app["score"] - best_web["score"]) < 10):
         _estado_abrir_destino = {"app": best_app["data"], "web": best_web["data"]}
         _hablar(
             f"Tengo '{best_app['data']['nombre']}' como app y '{best_web['data']['nombre']}' como web. "
@@ -539,12 +578,12 @@ def abrir_app(nombre_usuario: str, chat_widget=None, pedir_confirmacion: bool = 
         else best_web
     )
     print(f"[agent_pc] Elegido: {elegido['data']['nombre'] if elegido else 'None'} (score={elegido['score'] if elegido else 'N/A'})")
-    if elegido and len(query_words) >= 2 and elegido["score"] < min_seguro:
-        print(f"[agent_pc] Score bajo ({elegido['score']}) con {len(query_words)} palabras — Google search")
+    if elegido and elegido["score"] < min_seguro:
+        print(f"[agent_pc] Coincidencia insegura ({elegido['score']}); no se abrirá una app distinta")
         import webbrowser as _wb
         from urllib.parse import quote as _q
-        _hablar(f"No encontré {nombre_usuario} instalado. Buscando en Google.", chat_widget)
-        _wb.open(f"https://www.google.com/search?q={_q(nombre_usuario + ' página oficial')}")
+        _hablar(f"No encontré una coincidencia segura para {nombre_usuario}. Te muestro opciones para que elijas.", chat_widget)
+        _wb.open(f"https://www.google.com/search?q={_q(nombre_usuario)}")
         return
     if elegido and elegido["score"] >= min_seguro:
         print(f"[agent_pc] Ejecutando: {elegido['data']['nombre']} (score={elegido['score']})")
@@ -552,11 +591,11 @@ def abrir_app(nombre_usuario: str, chat_widget=None, pedir_confirmacion: bool = 
         return
 
     print(f"[agent_pc] No hay app elegida para {nombre_usuario}")
-    # Fallback final: Google con "página oficial"
+    # Fallback final: mostrar opciones en vez de inventar una ruta de aplicación.
     import webbrowser as _wb
     from urllib.parse import quote as _q
-    _hablar(f"No encontré {nombre_usuario} instalado. Buscando en Google.", chat_widget)
-    _wb.open(f"https://www.google.com/search?q={_q(nombre_usuario + ' página oficial')}")
+    _hablar(f"No encontré una coincidencia segura para {nombre_usuario}. Te muestro opciones para que elijas.", chat_widget)
+    _wb.open(f"https://www.google.com/search?q={_q(nombre_usuario)}")
 
 
 def resolver_destino_pendiente(respuesta: str, chat_widget=None) -> bool:
@@ -616,66 +655,99 @@ def buscar_archivos(termino: str, carpeta: str = None) -> list:
     ext_ok       = _extensiones_permitidas()
     ignorar      = _carpetas_ignorar()
     termino_norm = _quitar_tildes(termino.lower())
-    palabras     = [w for w in termino_norm.split() if len(w) > 2]
-    resultados   = []
+    # Normaliza acentos y puntuación sin perder dígitos; el signo + se
+    # considera separador para que "steam+t" pueda coincidir con el nombre.
+    termino_tokens = re.sub(r"[^\w]+", " ", termino_norm, flags=re.UNICODE).split()
+    termino_limpio = " ".join(termino_tokens)
+    palabras = [w for w in termino_tokens if len(w) > 1]
+    resultados = []
 
     for root, dirs, files in os.walk(carpeta, onerror=lambda e: None):
         dirs[:] = [d for d in dirs if d not in ignorar]
         for file in files:
             nombre_norm    = _quitar_tildes(file.lower())
             nombre_sin_ext = os.path.splitext(nombre_norm)[0]
+            nombre_limpio  = " ".join(re.sub(r"[^\w]+", " ", nombre_sin_ext, flags=re.UNICODE).split())
             ext            = os.path.splitext(nombre_norm)[1]
             if ext not in ext_ok:
                 continue
-            if len(palabras) >= 2:
-                if all(w in nombre_sin_ext for w in palabras):
-                    resultados.append(os.path.join(root, file))
-            else:
-                if termino_norm in nombre_norm or fuzz.token_set_ratio(termino_norm, nombre_sin_ext) >= 75:
-                    resultados.append(os.path.join(root, file))
+            if not termino_limpio:
+                continue
+            # Tolerancia a erratas y tildes, pero siempre limitada al nombre
+            # del archivo; jamás busca apps o páginas cuando se pidió archivo.
+            ratio_total = fuzz.WRatio(termino_limpio, nombre_limpio)
+            tokens_nombre = set(nombre_limpio.split())
+            cobertura = (
+                sum(1 for palabra in palabras if palabra in tokens_nombre) / len(palabras)
+                if palabras else 0
+            )
+            # token_set_ratio por sí solo puede dar 100 cuando solo coincide
+            # "steam" dentro de "proyecto steam+t"; penalizar términos omitidos.
+            score = max(ratio_total, fuzz.token_set_ratio(termino_limpio, nombre_limpio) * cobertura)
+            if termino_limpio in nombre_limpio or score >= (68 if len(palabras) >= 2 else 76):
+                resultados.append((score, os.path.join(root, file)))
             if len(resultados) >= 100:
                 break
         if len(resultados) >= 100:
             break
 
-    resultados_unique = list(dict.fromkeys(resultados))
-    resultados_unique.sort(key=lambda p: os.path.basename(p).lower())
-    return resultados_unique[:20]
+    por_ruta = {}
+    for score, ruta in resultados:
+        por_ruta[ruta] = max(score, por_ruta.get(ruta, 0))
+    return [ruta for ruta, _ in sorted(por_ruta.items(), key=lambda item: (-item[1], os.path.basename(item[0]).lower()))[:20]]
 
 
 def buscar_y_abrir_archivo(termino: str, chat_widget=None):
     """Busca archivos en disco. Muestra lista clickeable. Solo abre si hay 1 resultado o el termino incluye 'abrir'."""
     import threading as _th
 
-    abrir_directo = any(x in termino.lower() for x in ["abrir", "abre", "open"])
-    termino_busq  = re.sub(r'\b(abrir?|abre|open)\b', '', termino, flags=re.IGNORECASE).strip()
+    termino_busq  = re.sub(
+        r'\b(?:abrir?|abre|open|buscar?|busca|encuentra|localiza|muestra|archivo|archivos|'
+        r'documento|documentos|fichero|ficheros|el|la|los|las|de|del|por favor)\b',
+        ' ', termino, flags=re.IGNORECASE
+    )
+    termino_busq = re.sub(r'\s+', ' ', termino_busq).strip()
 
     def _worker():
         global _archivo_office_pendiente
+        from urllib.parse import quote
+        from html import escape
+
+        def _enlace_archivo(ruta):
+            return "jarvis://openfile?path=" + quote(os.path.abspath(ruta), safe="")
+
         _hablar("Buscando...", chat_widget)
         encontrados = buscar_archivos(termino_busq or termino)
         if not encontrados:
             _hablar(f"No encontré nada parecido a '{termino_busq or termino}'.", chat_widget)
             return
 
-        if len(encontrados) == 1 or abrir_directo:
-            # Abrir el primero directamente
+        if len(encontrados) == 1:
+            # Abrir directamente solo cuando la coincidencia es única.
             ruta   = encontrados[0]
             nombre = os.path.basename(ruta)
             ext    = os.path.splitext(ruta)[1].lower()
             if ext in OFFICE_EXTENSIONES:
-                _hablar(f"Encontré {nombre}. ¿Lo abro en la app o en la web?", chat_widget)
-                _archivo_office_pendiente = ruta
+                _hablar(f"Abriendo {nombre}.", chat_widget)
+                try:
+                    os.startfile(ruta)
+                except Exception:
+                    import subprocess
+                    subprocess.Popen(["explorer.exe", ruta])
             else:
                 _hablar(f"Abriendo {nombre}.", chat_widget)
-                os.startfile(ruta)
+                try:
+                    os.startfile(ruta)
+                except Exception:
+                    import subprocess
+                    subprocess.Popen(["explorer.exe", ruta])
             if len(encontrados) > 1:
                 # Mostrar el resto como clickeables igual
                 nombres_extra = encontrados[1:8]
                 filas = "".join(
                     f'<tr><td style="padding:3px 8px;">'
-                    f'<a href="open:{r}" style="color:#4db8ff;font-size:12px;">'
-                    f'📄 {os.path.basename(r)}</a></td></tr>'
+                    f'<a href="{_enlace_archivo(r)}" style="color:#4db8ff;font-size:12px;">'
+                    f'📄 {escape(os.path.basename(r))}</a></td></tr>'
                     for r in nombres_extra
                 )
                 html = (
@@ -689,9 +761,9 @@ def buscar_y_abrir_archivo(termino: str, chat_widget=None):
             nombres = encontrados[:10]
             filas = "".join(
                 f'<tr><td style="padding:4px 8px;border-bottom:1px solid #0d1f3a;">'
-                f'<a href="open:{r}" style="color:#4db8ff;text-decoration:none;font-size:13px;">'
-                f'📄 {os.path.basename(r)}</a>'
-                f'<br><span style="color:#556677;font-size:10px;">{os.path.dirname(r)}</span>'
+                f'<a href="{_enlace_archivo(r)}" style="color:#4db8ff;text-decoration:none;font-size:13px;">'
+                f'📄 {escape(os.path.basename(r))}</a>'
+                f'<br><span style="color:#556677;font-size:10px;">{escape(os.path.dirname(r))}</span>'
                 f'</td></tr>'
                 for r in nombres
             )
@@ -732,36 +804,42 @@ def ejecutar(accion: str, params: dict, chat_widget=None) -> bool:
 
     Devuelve True si procesó la acción, False si la acción no existe.
     """
-    p = params or {}
+    p = params if isinstance(params, dict) else {}
+
+    def entero_seguro(valor, predeterminado):
+        try:
+            return int(valor)
+        except (TypeError, ValueError, OverflowError):
+            return predeterminado
 
     # ── Ventanas ─────────────────────────────────────────────────────────────
     if accion == "abrir":
-        abrir_app(p.get("nombre", ""), chat_widget)
+        abrir_app(str(p.get("nombre") or ""), chat_widget)
         return True
 
     if accion == "cerrar":
-        cerrar_app(p.get("nombre", ""), chat_widget)
+        cerrar_app(str(p.get("nombre") or ""), chat_widget)
         return True
 
     if accion == "minimizar":
-        minimizar_app(p.get("nombre", ""), chat_widget)
+        minimizar_app(str(p.get("nombre") or ""), chat_widget)
         return True
 
     if accion == "maximizar":
-        maximizar_app(p.get("nombre", ""), chat_widget)
+        maximizar_app(str(p.get("nombre") or ""), chat_widget)
         return True
 
     # ── Volumen ───────────────────────────────────────────────────────────────
     if accion == "poner_volumen":
-        poner_volumen(int(p.get("porcentaje", p.get("nivel", 50))), chat_widget)
+        poner_volumen(max(0, min(100, entero_seguro(p.get("porcentaje", p.get("nivel", 50)), 50))), chat_widget)
         return True
 
     if accion == "subir_volumen":
-        subir_volumen(int(p.get("porcentaje", 10)), chat_widget)
+        subir_volumen(max(0, min(100, entero_seguro(p.get("porcentaje", 10), 10))), chat_widget)
         return True
 
     if accion == "bajar_volumen":
-        bajar_volumen(int(p.get("porcentaje", 10)), chat_widget)
+        bajar_volumen(max(0, min(100, entero_seguro(p.get("porcentaje", 10), 10))), chat_widget)
         return True
 
     if accion == "mute":
@@ -770,15 +848,15 @@ def ejecutar(accion: str, params: dict, chat_widget=None) -> bool:
 
     # ── Brillo ────────────────────────────────────────────────────────────────
     if accion == "subir_brillo":
-        subir_brillo(int(p.get("porcentaje", 10)), chat_widget)
+        subir_brillo(max(0, min(100, entero_seguro(p.get("porcentaje", 10), 10))), chat_widget)
         return True
 
     if accion == "bajar_brillo":
-        bajar_brillo(int(p.get("porcentaje", 10)), chat_widget)
+        bajar_brillo(max(0, min(100, entero_seguro(p.get("porcentaje", 10), 10))), chat_widget)
         return True
 
     if accion == "poner_brillo":
-        set_brightness(int(p.get("porcentaje", p.get("nivel", 50))), chat_widget)
+        set_brightness(max(0, min(100, entero_seguro(p.get("porcentaje", p.get("nivel", 50)), 50))), chat_widget)
         return True
 
     # ── Encendido / Energía ───────────────────────────────────────────────────
@@ -804,12 +882,12 @@ def ejecutar(accion: str, params: dict, chat_widget=None) -> bool:
 
     # ── Modos ─────────────────────────────────────────────────────────────────
     if accion == "modo":
-        activar_modo(p.get("nombre", ""), chat_widget)
+        activar_modo(str(p.get("nombre") or ""), chat_widget)
         return True
 
     # ── Archivos ──────────────────────────────────────────────────────────────
     if accion == "buscar_archivo":
-        termino = p.get("termino", "").strip()
+        termino = str(p.get("termino") or "").strip()
         if not termino:
             _hablar("¿Qué archivo estás buscando?", chat_widget)
             return True
@@ -817,15 +895,15 @@ def ejecutar(accion: str, params: dict, chat_widget=None) -> bool:
         return True
 
     if accion == "aprender_app":
-        nombre = p.get("nombre", "").strip()
-        ruta   = p.get("ruta", "").strip()
+        nombre = str(p.get("nombre") or "").strip()
+        ruta   = str(p.get("ruta") or "").strip()
         if nombre and ruta:
             aprender_app(nombre, ruta, chat_widget)
         return True
 
     # ── Estado: resolver destino app vs web pendiente ─────────────────────────
     if accion == "resolver_destino":
-        resolver_destino_pendiente(p.get("respuesta", ""), chat_widget)
+        resolver_destino_pendiente(str(p.get("respuesta") or ""), chat_widget)
         return True
 
     print(f"[agent_pc] Acción desconocida: '{accion}'")

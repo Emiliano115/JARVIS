@@ -117,7 +117,7 @@ def _config():
 
 def _markdown(txt):
     fn = _ctx.get("markdown_a_html")
-    return fn(txt) if fn else txt
+    return fn(txt) if fn else escape(str(txt or ""))
 
 def _limpiar(html):
     fn = _ctx.get("limpiar_html")
@@ -170,7 +170,9 @@ def _init_db():
                 etiqueta  TEXT    NOT NULL DEFAULT '',
                 repetir   TEXT,
                 activa    INTEGER NOT NULL DEFAULT 1,
-                creada    TEXT    NOT NULL
+                creada    TEXT    NOT NULL,
+                reloj_windows INTEGER NOT NULL DEFAULT 0,
+                reloj_nombre TEXT NOT NULL DEFAULT ''
             );
 
             CREATE TABLE IF NOT EXISTS recordatorios (
@@ -246,6 +248,13 @@ def _init_db():
         for columna, sentencia in migraciones.items():
             if columna not in columnas:
                 conn.execute(sentencia)
+        columnas_alarmas = {row[1] for row in conn.execute("PRAGMA table_info(alarmas)")}
+        for columna, sentencia in {
+            "reloj_windows": "ALTER TABLE alarmas ADD COLUMN reloj_windows INTEGER NOT NULL DEFAULT 0",
+            "reloj_nombre": "ALTER TABLE alarmas ADD COLUMN reloj_nombre TEXT NOT NULL DEFAULT ''",
+        }.items():
+            if columna not in columnas_alarmas:
+                conn.execute(sentencia)
 
 
 # =============================================================================
@@ -254,6 +263,8 @@ def _init_db():
 
 def nota_crear(contenido: str, titulo: str = "", chat_widget=None):
     """Crea una nota nueva. Si no hay título genera uno automático."""
+    contenido = str(contenido or "")
+    titulo = str(titulo or "")
     ahora = datetime.now().isoformat(timespec="seconds")
     if not titulo:
         # Primera línea como título (máx 50 chars)
@@ -269,7 +280,7 @@ def nota_crear(contenido: str, titulo: str = "", chat_widget=None):
 
     html = (
         f'<p style="color:#4db8ff;font-weight:bold;">📝 Nota guardada</p>'
-        f'<p style="color:#ccd6f6;font-size:13px;"><b>#{nid}</b> — {titulo}</p>'
+        f'<p style="color:#ccd6f6;font-size:13px;"><b>#{nid}</b> — {escape(titulo)}</p>'
         f'<p style="color:#8899bb;font-size:12px;">{ahora[:16].replace("T"," ")}</p>'
     )
     _bridge_html(_burbuja(html))
@@ -301,7 +312,7 @@ def nota_leer(id: int = None, titulo: str = "", chat_widget=None):
         n = rows[0]
         contenido_html = _markdown(n["contenido"])
         html = (
-            f'<p style="color:#4db8ff;font-weight:bold;">📝 #{n["id"]} — {n["titulo"]}</p>'
+            f'<p style="color:#4db8ff;font-weight:bold;">📝 #{n["id"]} — {escape(n["titulo"])}</p>'
             f'<div style="color:#ccd6f6;font-size:13px;">{contenido_html}</div>'
             f'<p style="color:#556677;font-size:11px;">Creada: {n["creada"][:16].replace("T"," ")} · '
             f'Editada: {n["editada"][:16].replace("T"," ")}</p>'
@@ -313,7 +324,7 @@ def nota_leer(id: int = None, titulo: str = "", chat_widget=None):
         filas = "".join(
             f'<tr>'
             f'<td style="color:#4db8ff;padding:3px 10px;">#{r["id"]}</td>'
-            f'<td style="color:#ccd6f6;padding:3px 8px;">{r["titulo"][:60]}</td>'
+            f'<td style="color:#ccd6f6;padding:3px 8px;">{escape(r["titulo"][:60])}</td>'
             f'<td style="color:#8899bb;font-size:11px;padding:3px 8px;">{r["editada"][:10]}</td>'
             f'</tr>'
             for r in rows
@@ -343,12 +354,12 @@ def nota_buscar(termino: str, chat_widget=None):
     filas = "".join(
         f'<tr>'
         f'<td style="color:#4db8ff;padding:3px 10px;">#{r["id"]}</td>'
-        f'<td style="color:#ccd6f6;padding:3px 8px;">{r["titulo"][:60]}</td>'
+        f'<td style="color:#ccd6f6;padding:3px 8px;">{escape(r["titulo"][:60])}</td>'
         f'</tr>'
         for r in rows
     )
     html = (
-        f'<p style="color:#4db8ff;font-weight:bold;">🔍 "{termino}" — {len(rows)} resultado(s)</p>'
+        f'<p style="color:#4db8ff;font-weight:bold;">🔍 "{escape(termino)}" — {len(rows)} resultado(s)</p>'
         f'<table cellspacing="2">{filas}</table>'
     )
     _bridge_html(_burbuja(html))
@@ -358,6 +369,9 @@ def nota_buscar(termino: str, chat_widget=None):
 
 def nota_editar(id_o_titulo: str, contenido: str = None, titulo_nuevo: str = None, chat_widget=None):
     """Edita el título o contenido de una nota."""
+    id_o_titulo = str(id_o_titulo or "")
+    contenido = str(contenido) if contenido is not None else None
+    titulo_nuevo = str(titulo_nuevo) if titulo_nuevo is not None else None
     ahora = datetime.now().isoformat(timespec="seconds")
     with _get_conn() as conn:
         # Buscar por ID o título
@@ -383,7 +397,7 @@ def nota_editar(id_o_titulo: str, contenido: str = None, titulo_nuevo: str = Non
 
     _hablar(f"Nota '{nuevo_titulo}' actualizada.", chat_widget)
     html = (
-        f'<p style="color:#4db8ff;">✏️ Nota actualizada: <b>{nuevo_titulo}</b></p>'
+        f'<p style="color:#4db8ff;">✏️ Nota actualizada: <b>{escape(nuevo_titulo)}</b></p>'
     )
     _bridge_html(_burbuja(html))
     _bridge_scroll()
@@ -391,6 +405,7 @@ def nota_editar(id_o_titulo: str, contenido: str = None, titulo_nuevo: str = Non
 
 def nota_eliminar(id_o_titulo: str, chat_widget=None):
     """Elimina una nota por ID o título."""
+    id_o_titulo = str(id_o_titulo or "")
     with _get_conn() as conn:
         try:
             nid = int(id_o_titulo)
@@ -406,7 +421,7 @@ def nota_eliminar(id_o_titulo: str, chat_widget=None):
 
     nombre = row["titulo"] if row else id_o_titulo
     _hablar(f"Nota '{nombre}' eliminada.", chat_widget)
-    html = f'<p style="color:#ff6b6b;">🗑️ Nota eliminada: {nombre}</p>'
+    html = f'<p style="color:#ff6b6b;">🗑️ Nota eliminada: {escape(str(nombre))}</p>'
     _bridge_html(_burbuja(html))
     _bridge_scroll()
 
@@ -420,23 +435,31 @@ def _parsear_hora_alarma(hora_str: str) -> Optional[datetime]:
     Convierte 'HH:MM', 'en X minutos', 'en X horas' a datetime futuro.
     Devuelve None si no puede parsear.
     """
-    hora_str = hora_str.strip().lower()
+    hora_str = str(hora_str or "").strip().lower()
     ahora    = datetime.now()
 
     # "en X minutos"
     m = re.search(r"en\s+(\d+)\s+minuto", hora_str)
     if m:
-        return ahora + timedelta(minutes=int(m.group(1)))
+        try:
+            return ahora + timedelta(minutes=int(m.group(1)))
+        except (OverflowError, ValueError):
+            return None
 
     # "en X horas"
     m = re.search(r"en\s+(\d+)\s+hora", hora_str)
     if m:
-        return ahora + timedelta(hours=int(m.group(1)))
+        try:
+            return ahora + timedelta(hours=int(m.group(1)))
+        except (OverflowError, ValueError):
+            return None
 
     # "HH:MM" o "H:MM"
     m = re.search(r"(\d{1,2}):(\d{2})", hora_str)
     if m:
         h, mi = int(m.group(1)), int(m.group(2))
+        if h > 23 or mi > 59:
+            return None
         dt = ahora.replace(hour=h, minute=mi, second=0, microsecond=0)
         if dt <= ahora:
             dt += timedelta(days=1)
@@ -451,6 +474,8 @@ def alarma_crear(hora_str: str, etiqueta: str = "", repetir: str = None, chat_wi
     hora_str : "07:30" | "en 20 minutos" | "en 2 horas"
     repetir  : "diaria" | "semanal" | None
     """
+    hora_str = str(hora_str or "")
+    etiqueta = str(etiqueta or "")
     dt = _parsear_hora_alarma(hora_str)
     if not dt:
         _hablar(f"No entendí la hora '{hora_str}'. Di algo como '07:30' o 'en 20 minutos'.", chat_widget)
@@ -463,25 +488,64 @@ def alarma_crear(hora_str: str, etiqueta: str = "", repetir: str = None, chat_wi
 
     with _get_conn() as conn:
         cur = conn.execute(
-            "INSERT INTO alarmas (hora, etiqueta, repetir, activa, creada) VALUES (?,?,?,1,?)",
+            "INSERT INTO alarmas (hora, etiqueta, repetir, activa, creada, reloj_windows, reloj_nombre) "
+            "VALUES (?,?,?,1,?,0,'')",
             (hora_iso, etiqueta, repetir, ahora)
         )
         aid = cur.lastrowid
+
+    usa_reloj_windows = False
+    reloj_confirmado = False
+    detalle_reloj = ""
+    nombre_reloj = f"{etiqueta} [Jarvis #{aid}]"
+    try:
+        import agent_reloj_windows
+        resultado = agent_reloj_windows.crear_alarma(dt.hour, dt.minute, nombre_reloj, repetir=repetir)
+        if resultado.get("ok") or resultado.get("saved"):
+            usa_reloj_windows = True
+            reloj_confirmado = bool(resultado.get("ok"))
+            detalle_reloj = (
+                " Se confirmó en Reloj de Windows."
+                if reloj_confirmado else
+                " Reloj pudo guardarla, pero no pude confirmarlo; revísala en la app."
+            )
+            with _get_conn() as conn:
+                conn.execute(
+                    "UPDATE alarmas SET reloj_windows=1, reloj_nombre=? WHERE id=?",
+                    (nombre_reloj, aid),
+                )
+        else:
+            error_reloj = str(resultado.get("error", "Error desconocido")).replace("\n", " ")[:240]
+            detalle_reloj = f" No pude guardarla en Reloj: {error_reloj}. Jarvis la mantendrá como alarma interna."
+            print(f"[Reloj Windows] {error_reloj}")
+    except Exception as exc:
+        detalle_reloj = " No pude abrir Reloj; Jarvis la mantendrá como alarma interna."
+        print(f"[Reloj Windows] {exc}")
 
     diferencia = dt - datetime.now()
     minutos    = int(diferencia.total_seconds() // 60)
     msg_tiempo = f"en {minutos} min" if minutos < 60 else f"a las {dt.strftime('%H:%M')}"
 
+    estado_html = (
+        "guardada en Reloj de Windows" if reloj_confirmado else
+        "pendiente de confirmar en Reloj" if usa_reloj_windows else
+        "programada en Jarvis"
+    )
     html = (
-        f'<p style="color:#ffd700;font-weight:bold;">⏰ Alarma #{aid} programada</p>'
+        f'<p style="color:#ffd700;font-weight:bold;">⏰ Alarma #{aid} {estado_html}</p>'
         f'<p style="color:#ccd6f6;font-size:13px;">'
-        f'<b>{etiqueta}</b> — {dt.strftime("%H:%M")} ({msg_tiempo})'
-        f'{"<br>🔁 " + repetir if repetir else ""}'
+        f'<b>{escape(etiqueta)}</b> — {dt.strftime("%H:%M")} ({msg_tiempo})'
+        f'{"<br>🔁 " + escape(str(repetir)) if repetir else ""}'
         f'</p>'
     )
     _bridge_html(_burbuja(html))
     _bridge_scroll()
-    _hablar(f"Alarma '{etiqueta}' programada para las {dt.strftime('%H:%M')}.", chat_widget)
+    estado = (
+        "guardada en Reloj de Windows" if reloj_confirmado else
+        "enviada a Reloj de Windows, pero pendiente de confirmación" if usa_reloj_windows else
+        "programada en Jarvis"
+    )
+    _hablar(f"Alarma '{etiqueta}' {estado} para las {dt.strftime('%H:%M')}.{detalle_reloj}", chat_widget)
 
 
 def alarma_listar(chat_widget=None):
@@ -498,10 +562,11 @@ def alarma_listar(chat_widget=None):
     filas = "".join(
         f'<tr>'
         f'<td style="color:#ffd700;padding:3px 10px;">#{r["id"]}</td>'
-        f'<td style="color:#ccd6f6;padding:3px 8px;">{r["etiqueta"]}</td>'
+        f'<td style="color:#ccd6f6;padding:3px 8px;">{escape(r["etiqueta"])}</td>'
         f'<td style="color:#8899bb;font-size:12px;padding:3px 8px;">'
         f'{r["hora"][11:16]}'
-        f'{"  🔁 " + r["repetir"] if r["repetir"] else ""}'
+        f'{"  🔁 " + escape(str(r["repetir"])) if r["repetir"] else ""}'
+        f'{"  · Reloj de Windows" if r["reloj_windows"] else ""}'
         f'</td>'
         f'</tr>'
         for r in rows
@@ -520,19 +585,37 @@ def alarma_eliminar(id_o_etiqueta: str, chat_widget=None):
     with _get_conn() as conn:
         try:
             aid = int(id_o_etiqueta)
-            row = conn.execute("SELECT etiqueta FROM alarmas WHERE id=?", (aid,)).fetchone()
-            conn.execute("UPDATE alarmas SET activa=0 WHERE id=?", (aid,))
-        except ValueError:
             row = conn.execute(
-                "SELECT id, etiqueta FROM alarmas WHERE etiqueta LIKE ? AND activa=1 LIMIT 1",
+                "SELECT * FROM alarmas WHERE id=? AND activa=1", (aid,)
+            ).fetchone()
+        except (TypeError, ValueError, OverflowError):
+            row = conn.execute(
+                "SELECT * FROM alarmas WHERE etiqueta LIKE ? AND activa=1 LIMIT 1",
                 (f"%{id_o_etiqueta}%",)
             ).fetchone()
-            if row:
-                conn.execute("UPDATE alarmas SET activa=0 WHERE id=?", (row["id"],))
 
-    nombre = row["etiqueta"] if row else id_o_etiqueta
-    _hablar(f"Alarma '{nombre}' eliminada.", chat_widget)
-    html = f'<p style="color:#ff6b6b;">🗑️ Alarma eliminada: {nombre}</p>'
+    if not row:
+        _hablar(f"No encontré una alarma activa con '{id_o_etiqueta}'.", chat_widget)
+        return
+    if row["reloj_windows"]:
+        try:
+            import agent_reloj_windows
+            resultado = agent_reloj_windows.eliminar_alarma(row["reloj_nombre"])
+        except Exception as exc:
+            resultado = {"ok": False, "error": str(exc)}
+        if not resultado.get("ok"):
+            _hablar(
+                f"No pude eliminar la alarma de Reloj de Windows: {resultado.get('error', 'error desconocido')}. "
+                "Sigue activa en Jarvis; puedes eliminarla manualmente en Reloj.",
+                chat_widget,
+            )
+            return
+    with _get_conn() as conn:
+        conn.execute("UPDATE alarmas SET activa=0 WHERE id=?", (row["id"],))
+    nombre = row["etiqueta"]
+    destino = " de Reloj de Windows y Jarvis" if row["reloj_windows"] else ""
+    _hablar(f"Alarma '{nombre}' eliminada{destino}.", chat_widget)
+    html = f'<p style="color:#ff6b6b;">🗑️ Alarma eliminada: {escape(str(nombre))}</p>'
     _bridge_html(_burbuja(html))
     _bridge_scroll()
 
@@ -553,30 +636,24 @@ def _disparar_alarma(alarma: sqlite3.Row):
 
     html = (
         f'<p style="color:#ffd700;font-size:15px;font-weight:bold;">'
-        f'⏰ ¡ALARMA! {etiqueta}</p>'
+        f'⏰ ¡ALARMA! {escape(etiqueta)}</p>'
         f'<p style="color:#ccd6f6;font-size:13px;">{datetime.now().strftime("%H:%M")}</p>'
     )
     _bridge_html(_burbuja(html))
     _bridge_scroll()
 
-    # Reprogramar si es recurrente
-    if alarma["repetir"] == "diaria":
-        nueva_hora = datetime.fromisoformat(alarma["hora"]) + timedelta(days=1)
-        with _get_conn() as conn:
+    repetir = alarma["repetir"]
+    nueva_hora = (
+        _proxima_hora_repetida(datetime.fromisoformat(alarma["hora"]), repetir)
+        if repetir else None
+    )
+    with _get_conn() as conn:
+        if nueva_hora:
             conn.execute(
                 "UPDATE alarmas SET hora=? WHERE id=?",
-                (nueva_hora.isoformat(timespec="seconds"), alarma["id"])
+                (nueva_hora.isoformat(timespec="seconds"), alarma["id"]),
             )
-    elif alarma["repetir"] == "semanal":
-        nueva_hora = datetime.fromisoformat(alarma["hora"]) + timedelta(weeks=1)
-        with _get_conn() as conn:
-            conn.execute(
-                "UPDATE alarmas SET hora=? WHERE id=?",
-                (nueva_hora.isoformat(timespec="seconds"), alarma["id"])
-            )
-    else:
-        # Una sola vez → desactivar
-        with _get_conn() as conn:
+        else:
             conn.execute("UPDATE alarmas SET activa=0 WHERE id=?", (alarma["id"],))
 
 
@@ -588,8 +665,14 @@ def _parsear_fecha_hora(fecha_hora_str: str, minutos: int = None) -> Optional[da
     """Convierte texto a datetime futuro."""
     ahora = datetime.now()
 
-    if minutos:
-        return ahora + timedelta(minutes=minutos)
+    if minutos is not None:
+        try:
+            minutos = int(minutos)
+            if minutos < 0:
+                return None
+            return ahora + timedelta(minutes=minutos)
+        except (TypeError, ValueError, OverflowError):
+            return None
 
     if not fecha_hora_str:
         return None
@@ -599,12 +682,18 @@ def _parsear_fecha_hora(fecha_hora_str: str, minutos: int = None) -> Optional[da
     # "en X minutos"
     m = re.search(r"en\s+(\d+)\s+minuto", s)
     if m:
-        return ahora + timedelta(minutes=int(m.group(1)))
+        try:
+            return ahora + timedelta(minutes=int(m.group(1)))
+        except (OverflowError, ValueError):
+            return None
 
     # "en X horas"
     m = re.search(r"en\s+(\d+)\s+hora", s)
     if m:
-        return ahora + timedelta(hours=int(m.group(1)))
+        try:
+            return ahora + timedelta(hours=int(m.group(1)))
+        except (OverflowError, ValueError):
+            return None
 
     # ISO o "YYYY-MM-DD HH:MM"
     for fmt in ("%Y-%m-%dT%H:%M", "%Y-%m-%d %H:%M", "%Y-%m-%d"):
@@ -616,7 +705,10 @@ def _parsear_fecha_hora(fecha_hora_str: str, minutos: int = None) -> Optional[da
     # "HH:MM" sólo hora → hoy o mañana
     m = re.search(r"(\d{1,2}):(\d{2})", s)
     if m:
-        dt = ahora.replace(hour=int(m.group(1)), minute=int(m.group(2)), second=0, microsecond=0)
+        hora, minuto = int(m.group(1)), int(m.group(2))
+        if hora > 23 or minuto > 59:
+            return None
+        dt = ahora.replace(hour=hora, minute=minuto, second=0, microsecond=0)
         if dt <= ahora:
             dt += timedelta(days=1)
         return dt
@@ -633,6 +725,8 @@ def recordatorio_crear(texto: str, fecha_hora_str: str = "", minutos: int = None
     fecha_hora_str: "2025-06-01 09:00" | "en 30 minutos" | "15:00"
     minutos       : alternativa directa si viene como int
     """
+    texto = str(texto or "")
+    fecha_hora_str = str(fecha_hora_str or "")
     dt = _parsear_fecha_hora(fecha_hora_str, minutos)
     if not dt:
         _hablar("Dime a qué hora quieres el recordatorio.", chat_widget)
@@ -669,7 +763,7 @@ def recordatorio_crear(texto: str, fecha_hora_str: str = "", minutos: int = None
 
     html = (
         f'<p style="color:#7ec8e3;font-weight:bold;">🔔 Recordatorio #{rid}</p>'
-        f'<p style="color:#ccd6f6;font-size:13px;">"{texto}"</p>'
+        f'<p style="color:#ccd6f6;font-size:13px;">"{escape(texto)}"</p>'
         f'<p style="color:#8899bb;font-size:12px;">{msg_tiempo}</p>'
     )
     _bridge_html(_burbuja(html))
@@ -692,7 +786,7 @@ def recordatorio_listar(chat_widget=None):
     filas = "".join(
         f'<tr>'
         f'<td style="color:#7ec8e3;padding:3px 10px;">#{r["id"]}</td>'
-        f'<td style="color:#ccd6f6;padding:3px 8px;">{r["texto"][:60]}</td>'
+        f'<td style="color:#ccd6f6;padding:3px 8px;">{escape(r["texto"][:60])}</td>'
         f'<td style="color:#8899bb;font-size:12px;padding:3px 8px;">'
         f'{r["fecha_hora"][11:16]} {r["fecha_hora"][:10]}'
         f'</td>'
@@ -709,25 +803,73 @@ def recordatorio_listar(chat_widget=None):
 
 
 def recordatorio_eliminar(id_o_texto: str, chat_widget=None):
-    """Marca un recordatorio como completado."""
+    """Elimina un recordatorio pendiente por ID o por una parte de su texto."""
     with _get_conn() as conn:
         try:
             rid = int(id_o_texto)
             row = conn.execute("SELECT texto FROM recordatorios WHERE id=?", (rid,)).fetchone()
-            conn.execute("UPDATE recordatorios SET completado=1 WHERE id=?", (rid,))
-        except ValueError:
+            conn.execute("DELETE FROM recordatorios WHERE id=? AND completado=0", (rid,))
+        except (TypeError, ValueError, OverflowError):
             row = conn.execute(
-                "SELECT id, texto FROM recordatorios WHERE texto LIKE ? AND completado=0 LIMIT 1",
+                "SELECT id, texto FROM recordatorios WHERE texto LIKE ? AND completado=0 ORDER BY fecha_hora LIMIT 1",
                 (f"%{id_o_texto}%",)
             ).fetchone()
             if row:
-                conn.execute("UPDATE recordatorios SET completado=1 WHERE id=?", (row["id"],))
+                conn.execute("DELETE FROM recordatorios WHERE id=?", (row["id"],))
 
-    nombre = row["texto"][:50] if row else id_o_texto
+    if not row:
+        _hablar(f"No encontré un recordatorio pendiente con '{id_o_texto}'.", chat_widget)
+        return
+    nombre = row["texto"][:50]
     _hablar(f"Recordatorio '{nombre}' eliminado.", chat_widget)
-    html = f'<p style="color:#ff6b6b;">🗑️ Recordatorio eliminado: {nombre}</p>'
+    html = f'<p style="color:#ff6b6b;">🗑️ Recordatorio eliminado: {escape(str(nombre))}</p>'
     _bridge_html(_burbuja(html))
     _bridge_scroll()
+
+
+def recordatorio_editar(id_o_texto: str, texto_nuevo: str = None,
+                        fecha_hora_str: str = None, minutos: int = None, chat_widget=None):
+    """Edita el texto o el horario de un recordatorio local pendiente."""
+    id_o_texto = str(id_o_texto or "").strip()
+    texto_nuevo = str(texto_nuevo or "").strip()
+    dt = _parsear_fecha_hora(str(fecha_hora_str or ""), minutos)
+    if (fecha_hora_str or minutos is not None) and dt is None:
+        _hablar("No entendí la nueva fecha u hora del recordatorio.", chat_widget)
+        return False
+    if not texto_nuevo and dt is None:
+        _hablar("Dime qué quieres cambiar: el texto o la fecha y hora.", chat_widget)
+        return False
+
+    with _get_conn() as conn:
+        try:
+            row = conn.execute(
+                "SELECT * FROM recordatorios WHERE id=? AND completado=0",
+                (int(id_o_texto),),
+            ).fetchone()
+        except (TypeError, ValueError, OverflowError):
+            row = conn.execute(
+                "SELECT * FROM recordatorios WHERE texto LIKE ? AND completado=0 "
+                "ORDER BY fecha_hora LIMIT 1",
+                (f"%{id_o_texto}%",),
+            ).fetchone()
+        if not row:
+            _hablar(f"No encontré un recordatorio pendiente con '{id_o_texto}'.", chat_widget)
+            return False
+        nuevo_texto = texto_nuevo or row["texto"]
+        nueva_fecha = dt.isoformat(timespec="seconds") if dt else row["fecha_hora"]
+        conn.execute(
+            "UPDATE recordatorios SET texto=?, fecha_hora=? WHERE id=?",
+            (nuevo_texto, nueva_fecha, row["id"]),
+        )
+
+    _bridge_html(_burbuja(
+        f'<p style="color:#7ec8e3;font-weight:bold;">Recordatorio actualizado</p>'
+        f'<p style="color:#ccd6f6;">{escape(nuevo_texto)} · '
+        f'{escape(nueva_fecha[11:16])} {escape(nueva_fecha[:10])}</p>'
+    ))
+    _bridge_scroll()
+    _hablar("Recordatorio actualizado.", chat_widget)
+    return True
 
 
 def recordatorio_confirmar(id_o_texto: str = "", chat_widget=None):
@@ -757,7 +899,7 @@ def recordatorio_confirmar(id_o_texto: str = "", chat_widget=None):
     texto = row["texto"]
     html = (
         f'<p style="color:#a8e6cf;font-size:15px;font-weight:bold;">✓ Recordatorio confirmado</p>'
-        f'<p style="color:#ccd6f6;font-size:14px;">{texto}</p>'
+        f'<p style="color:#ccd6f6;font-size:14px;">{escape(texto)}</p>'
     )
     _bridge_html(_burbuja(html))
     _bridge_scroll()
@@ -796,13 +938,13 @@ def acompanamiento_resumen(chat_widget=None):
             marca = " · requiere confirmación" if row["acompanamiento"] else ""
             items.append(
                 f'<li style="color:#ccd6f6;">{row["fecha_hora"][11:16]} — '
-                f'{row["texto"][:100]}{marca}</li>'
+                f'{escape(row["texto"][:100])}{marca}</li>'
             )
             voz.append(f"a las {row['fecha_hora'][11:16]}: {row['texto']}")
         bloques.append('<p style="color:#7ec8e3;">🔔 Recordatorios</p><ul>' + ''.join(items) + '</ul>')
     if alarmas:
         items = [
-            f'<li style="color:#ccd6f6;">{row["hora"][11:16]} — {row["etiqueta"]}</li>'
+            f'<li style="color:#ccd6f6;">{row["hora"][11:16]} — {escape(row["etiqueta"])}</li>'
             for row in alarmas
         ]
         bloques.append('<p style="color:#ffd166;">⏰ Alarmas</p><ul>' + ''.join(items) + '</ul>')
@@ -935,7 +1077,7 @@ def _disparar_recordatorio(rec: sqlite3.Row):
     html = (
         f'<p style="color:#7ec8e3;font-size:15px;font-weight:bold;">'
         f'🔔 RECORDATORIO</p>'
-        f'<p style="color:#ccd6f6;font-size:14px;">{texto}</p>'
+        f'<p style="color:#ccd6f6;font-size:14px;">{escape(texto)}</p>'
         f'{"<p style=\'color:#ffd166;font-size:12px;\'>Pendiente de confirmación (" + str(intento) + "/" + str(max_intentos) + ")</p>" if es_acompanamiento else ""}'
     )
     _bridge_html(_burbuja(html))
@@ -984,6 +1126,28 @@ def _loop_monitor():
         time.sleep(5)
 
 
+def _proxima_hora_repetida(hora_actual: datetime, repetir: str) -> Optional[datetime]:
+    try:
+        import agent_reloj_windows
+        dias = agent_reloj_windows.dias_repeticion(repetir, hora_actual.weekday())
+    except Exception:
+        dias = None
+    if not dias:
+        return None
+    ahora = datetime.now()
+    base = ahora.replace(
+        hour=hora_actual.hour,
+        minute=hora_actual.minute,
+        second=0,
+        microsecond=0,
+    )
+    for offset in range(8):
+        candidata = base + timedelta(days=offset)
+        if candidata > ahora and candidata.weekday() in dias:
+            return candidata
+    return None
+
+
 def _revisar_alarmas():
     ahora = datetime.now()
     with _get_conn() as conn:
@@ -994,6 +1158,23 @@ def _revisar_alarmas():
         try:
             dt = datetime.fromisoformat(r["hora"])
             if dt <= ahora:
+                if r["reloj_windows"]:
+                    # Reloj reproduce el sonido; Jarvis mantiene el próximo
+                    # día de repetición en su registro, sin emitir otro sonido.
+                    if r["repetir"]:
+                        siguiente = _proxima_hora_repetida(dt, r["repetir"])
+                        with _get_conn() as conn:
+                            if siguiente:
+                                conn.execute(
+                                    "UPDATE alarmas SET hora=? WHERE id=?",
+                                    (siguiente.isoformat(timespec="seconds"), r["id"]),
+                                )
+                            else:
+                                conn.execute("UPDATE alarmas SET activa=0 WHERE id=?", (r["id"],))
+                    else:
+                        with _get_conn() as conn:
+                            conn.execute("UPDATE alarmas SET activa=0 WHERE id=?", (r["id"],))
+                    continue
                 with _alarmas_lock:
                     if r["id"] in _alarmas_en_proceso:
                         continue
@@ -1052,6 +1233,11 @@ def _disparar_recordatorio_seguro(rec: sqlite3.Row):
 def memoria_guardar(clave: str, valor: str, categoria: str = "general",
                     origen: str = "usuario", chat_widget=None):
     """Guarda o actualiza un dato en la memoria de sesión."""
+    clave = str(clave or "").strip()
+    valor = str(valor or "").strip()
+    if not clave:
+        _hablar("Necesito una clave para guardar ese dato en la memoria.", chat_widget)
+        return
     ahora = datetime.now().isoformat(timespec="seconds")
     categoria = str(categoria or "general").strip().lower()[:40] or "general"
     origen = str(origen or "usuario").strip()[:80] or "usuario"
@@ -1093,7 +1279,7 @@ def memoria_leer(clave: str = "", chat_widget=None):
     filas = "".join(
         f'<tr>'
         f'<td style="color:#a8e6cf;padding:3px 10px;">{escape(r["clave"])}</td>'
-        f'<td style="color:#ccd6f6;padding:3px 8px;">{escape(r["valor"][:80])}</td>'
+        f'<td style="color:#ccd6f6;padding:3px 8px;white-space:pre-wrap;">{escape(r["valor"])}</td>'
         f'<td style="color:#7ec8e3;font-size:11px;padding:3px 8px;">{escape(r["categoria"])}</td>'
         f'<td style="color:#667799;font-size:11px;padding:3px 8px;">{escape(r["origen"])}</td>'
         f'<td style="color:#556677;font-size:11px;padding:3px 8px;">{r["actualizado"][:10]}</td>'
@@ -1189,8 +1375,8 @@ def memoria_resumir(chat_widget=None):
 
     if mem:
         items = "".join(
-            f'<li style="color:#ccd6f6;font-size:12px;">'
-            f'<b>{r["clave"]}</b>: {r["valor"][:70]}</li>'
+            f'<li style="color:#ccd6f6;font-size:12px;white-space:pre-wrap;">'
+            f'<b>{escape(r["clave"])}</b>: {escape(r["valor"])}</li>'
             for r in mem
         )
         bloques.append(
@@ -1200,7 +1386,7 @@ def memoria_resumir(chat_widget=None):
 
     if notas_hoy:
         items = "".join(
-            f'<li style="color:#ccd6f6;font-size:12px;">{r["titulo"][:60]}</li>'
+            f'<li style="color:#ccd6f6;font-size:12px;">{escape(r["titulo"][:60])}</li>'
             for r in notas_hoy
         )
         bloques.append(
@@ -1211,7 +1397,7 @@ def memoria_resumir(chat_widget=None):
     if rec_pendientes:
         items = "".join(
             f'<li style="color:#ccd6f6;font-size:12px;">'
-            f'{r["texto"][:55]} <span style="color:#556677;">({r["fecha_hora"][11:16]})</span>'
+            f'{escape(r["texto"][:55])} <span style="color:#556677;">({r["fecha_hora"][11:16]})</span>'
             f'</li>'
             for r in rec_pendientes
         )
@@ -1223,8 +1409,8 @@ def memoria_resumir(chat_widget=None):
     if alarmas_activas:
         items = "".join(
             f'<li style="color:#ccd6f6;font-size:12px;">'
-            f'{r["etiqueta"]} — {r["hora"][11:16]}'
-            f'{"  🔁 " + r["repetir"] if r["repetir"] else ""}'
+            f'{escape(str(r["etiqueta"]))} — {r["hora"][11:16]}'
+            f'{"  🔁 " + escape(str(r["repetir"])) if r["repetir"] else ""}'
             f'</li>'
             for r in alarmas_activas
         )
@@ -1363,13 +1549,20 @@ def rutina_listar(chat_widget=None):
     if not rows:
         _hablar("No tienes rutinas guardadas.", chat_widget)
         return
-    filas = "".join(
-        f'<tr><td style="color:#7ec8e3;padding:4px 8px;">{escape(r["nombre"])}</td>'
-        f'<td style="color:#ccd6f6;padding:4px 8px;">{len(json.loads(r["acciones"]))} acciones</td>'
-        f'<td style="color:#a8e6cf;padding:4px 8px;">{"activa" if r["activa"] else "pausada"}</td>'
-        f'<td style="color:#8899bb;padding:4px 8px;">{r["proxima"] or "manual"}</td></tr>'
-        for r in rows
-    )
+    filas_lista = []
+    for row in rows:
+        try:
+            acciones = json.loads(row["acciones"])
+            cantidad = len(acciones) if isinstance(acciones, list) else 0
+        except (TypeError, json.JSONDecodeError):
+            cantidad = 0
+        filas_lista.append(
+            f'<tr><td style="color:#7ec8e3;padding:4px 8px;">{escape(row["nombre"])}</td>'
+            f'<td style="color:#ccd6f6;padding:4px 8px;">{cantidad} acciones</td>'
+            f'<td style="color:#a8e6cf;padding:4px 8px;">{"activa" if row["activa"] else "pausada"}</td>'
+            f'<td style="color:#8899bb;padding:4px 8px;">{escape(row["proxima"] or "manual")}</td></tr>'
+        )
+    filas = "".join(filas_lista)
     _bridge_html(_burbuja(f'<p style="color:#7ec8e3;font-weight:bold;">⚙ Rutinas</p><table>{filas}</table>'))
     _bridge_scroll()
     _hablar(f"Tienes {len(rows)} rutina(s).", chat_widget)
@@ -1396,7 +1589,11 @@ def rutina_ejecutar(nombre: str, chat_widget=None):
     resultado = _rutina_obtener(nombre)
     if not resultado:
         return
-    row, acciones = resultado
+    row, acciones_guardadas = resultado
+    acciones = _rutina_acciones({"acciones": acciones_guardadas})
+    if not acciones:
+        _hablar("La rutina no contiene acciones seguras para ejecutar.", chat_widget)
+        return
     ejecutar = _ctx.get("ejecutar_accion")
     if not ejecutar:
         _hablar("El motor de acciones todavía no está disponible.", chat_widget)
@@ -1469,7 +1666,7 @@ def _revisar_rutinas():
         try:
             with _get_conn() as conn:
                 conn.execute("UPDATE rutinas SET proxima=NULL, ultima=? WHERE id=?", (ahora.isoformat(timespec="seconds"), row["id"]))
-            acciones = json.loads(row["acciones"])
+            acciones = _rutina_acciones({"acciones": json.loads(row["acciones"])})
             ejecutar = _ctx.get("ejecutar_accion")
             if ejecutar:
                 for accion in acciones:
@@ -1496,7 +1693,7 @@ def ejecutar(accion: str, params: dict, chat_widget=None) -> bool:
     Punto de entrada único desde dispatcher.py.
     Devuelve True si procesó la acción.
     """
-    p = params or {}
+    p = params if isinstance(params, dict) else {}
 
     # ── Notas ────────────────────────────────────────────────────────────────
     if accion == "nota_crear":
@@ -1577,6 +1774,16 @@ def ejecutar(accion: str, params: dict, chat_widget=None) -> bool:
     if accion == "recordatorio_eliminar":
         recordatorio_eliminar(
             id_o_texto=str(p.get("id") or p.get("texto", "")),
+            chat_widget=chat_widget,
+        )
+        return True
+
+    if accion == "recordatorio_editar":
+        recordatorio_editar(
+            id_o_texto=str(p.get("id") or p.get("texto", "")),
+            texto_nuevo=p.get("texto_nuevo"),
+            fecha_hora_str=p.get("fecha_hora"),
+            minutos=p.get("minutos"),
             chat_widget=chat_widget,
         )
         return True

@@ -7,7 +7,7 @@ Esta nueva estructura permite que cada usuario use sus propias claves de IA, sin
 - cada usuario guarda sus propias claves localmente
 - Jarvis usa un proveedor por defecto o prioridad configurable
 - si un proveedor falla por cuota, token o error, se intenta el siguiente
-- si el usuario no tiene clave para una IA, puede usar un modelo local o un modo sin IA
+- la conversación y los recuerdos se guardan localmente, sin depender del proveedor
 - nuevas IAs pueden agregarse sin romper el resto del proyecto
 
 ## Archivos clave
@@ -23,7 +23,7 @@ Esta nueva estructura permite que cada usuario use sus propias claves de IA, sin
 3. guarda esa configuración localmente
 4. Jarvis intenta el proveedor activo
 5. si falla, usa el siguiente del fallback
-6. si no hay clave, se puede usar un modelo local o un modo offline
+6. si ningún proveedor responde, Jarvis informa que la IA no pudo responder
 
 ## Proveedores base soportados
 
@@ -33,7 +33,6 @@ Esta nueva estructura permite que cada usuario use sus propias claves de IA, sin
 - Anthropic / Claude
 - Mistral
 - DeepSeek
-- Ollama (local)
 
 ## Ejemplo de uso desde Python
 
@@ -53,7 +52,7 @@ print(manager.generate("Explica brevemente qué es Jarvis."))
 - guardar claves en almacenamiento local cifrado si es posible
 - usar un selector de proveedor por usuario
 - mantener una prioridad de fallback automática
-- dejar siempre un modelo local como última opción
+- conservar el historial local en SQLite y recuperar fragmentos relevantes con búsqueda de texto completo
 
 ## Importante
 
