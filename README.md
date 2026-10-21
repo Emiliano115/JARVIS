@@ -1,6 +1,6 @@
 # J.A.R.V.I.S.
 
-**Asistente de escritorio para Windows, en español.** Jarvis combina IA, voz y herramientas para ayudarte a controlar el PC, organizar tareas y consultar información desde una sola aplicación.
+**Asistente de escritorio para Windows, en español, e ingles.** Jarvis combina IA, voz y herramientas para ayudarte a controlar el PC, organizar tareas y consultar información desde una sola aplicación.
 
 [Descargar la última versión](https://github.com/Emiliano115/JARVIS/releases/latest) · [Ver el código](https://github.com/Emiliano115/JARVIS) · [Reportar un problema](https://github.com/Emiliano115/JARVIS/issues)
 
@@ -50,25 +50,18 @@ py -3.12 -m venv .venv
 
 ## Configurar la IA
 
-1. Abre **Configuración** en Jarvis.
-2. En **Modelo de IA**, agrega una clave API de un proveedor compatible y elige un modelo.
+1. Abre **Configuración** o el engranaje en Jarvis.
+2. En **Modelo de IA**, agrega una clave API de un proveedor compatible y elige un modelo. Para el proovedor teines que poner el link que el proovedor (ChatGTP, Gemini, Grok, Groq, Etc) te proporcione. Esto es además de la API
 3. Guarda los cambios y prueba un mensaje.
 
 La disponibilidad, los límites y los posibles cobros dependen del proveedor y de tu cuenta. No publiques ni compartas tus claves API.
 
 ## Conectar Google
 
-Gmail, Calendar, Tasks, Contacts y Drive requieren una aplicación OAuth de Google:
-
-1. Crea un proyecto en [Google Cloud Console](https://console.cloud.google.com/) y habilita las APIs que quieras usar.
-2. Crea credenciales OAuth para una aplicación de escritorio.
-3. Guarda el archivo de credenciales como `credentials.json` en la carpeta de Jarvis.
-4. Activa la integración desde **Extensiones** y completa la autorización en el navegador.
-
-`credentials.json` y `token.json` contienen información sensible. No los subas al repositorio ni los compartas.
+Para conectar a Jarvis con google puedes simplemente activarle la conexión desde el apartado en la misma interfaz de Jarvis. Esto te llevara a tu navegador para iniciar sesió. Jarvis por el momento no tiene una verificación completa de Google Oauth, por lo que pra iniciar sesión es necesario que le des a tu cuenta de google y hagas click en Advanced o avanzado en español. Y ahí le des click a Go to JARVIS o ir a JARVIS en español. Seleccionas las extensiones de google disponibles. Finalmente le das click en continuar o continue y ya podras usar las funciones de google de JARVIS.
 
 ## Privacidad
-
+Todo lo que guarde JARVIS en su memoria es completamente local, nosotros no tenemos manera aalguna de acceder a cualquier tipo de informción que le propongas a JARVIS. Esto incluye las APIs y credenciales que tu pongas para usr el modelo de IA que desees.
 - Jarvis guarda localmente notas, configuración, memoria e historial.
 - Al conversar, el texto se envía al proveedor de IA seleccionado para generar la respuesta.
 - La transcripción de voz y el análisis visual pueden enviar audio o una captura al servicio de IA correspondiente cuando usas esas funciones.
